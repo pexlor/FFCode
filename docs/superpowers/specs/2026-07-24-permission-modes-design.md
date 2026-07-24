@@ -104,7 +104,7 @@ func (m *Manager) SetMode(mode Mode) error
 
 静态 deny、能力限制、路径限制和 Critical 拒绝始终优先，任何模式均不能覆盖。
 
-当工具规则设置 `require_confirm: true` 时：
+当工具规则设置 `permission: confirm` 或 `require_confirm: true` 时：
 
 - `ask` 模式请求用户批准。
 - `full_access` 和 `auto_approve` 模式自动拒绝。
