@@ -11,12 +11,20 @@ import (
 var staticSystemPrompt string
 
 func BuildSystemPrompt() (string, error) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return BuildSystemPromptForWorkspace(workingDirectory)
+}
+
+func BuildSystemPromptForWorkspace(workspace string) (string, error) {
 	staticPrompt, err := buildStaticPrompt()
 	if err != nil {
 		return "", err
 	}
 
-	environmentPrompt, err := buildEnvironmentPrompt()
+	environmentPrompt, err := buildEnvironmentPrompt(workspace)
 	if err != nil {
 		return "", err
 	}
@@ -29,14 +37,10 @@ func BuildSystemPrompt() (string, error) {
 	return strings.Join(compactSections(sections), "\n\n"), nil
 }
 
-func buildEnvironmentPrompt() (string, error) {
+func buildEnvironmentPrompt(workingDirectory string) (string, error) {
 	var builder strings.Builder
 
-	now := time.Now()                   // 获取当前时间
-	workingDirectory, err := os.Getwd() // 获取当前进程的工作目录
-	if err != nil {
-		return "", err
-	}
+	now := time.Now()
 
 	builder.WriteString("# Environment\n\n")
 	builder.WriteString("- Current working directory: ")

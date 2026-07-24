@@ -4,8 +4,6 @@ import (
 	"MyCode/internal/mcp"
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 )
@@ -87,34 +85,4 @@ func LoadMCPTools(ctx context.Context, configPath string) ([]Tool, func(), error
 
 func mcpToolName(server, remote string) string {
 	return "mcp_" + nonToolName.ReplaceAllString(server, "_") + "_" + nonToolName.ReplaceAllString(remote, "_")
-}
-
-// CreateDefaultToolsWithMCP loads .agent/mcp.yaml if it exists. A malformed or
-// unreachable explicitly configured server fails initialization rather than
-// silently removing tools.
-func CreateDefaultToolsWithMCP(ctx context.Context) (*ToolsManager, func(), error) {
-	manager := CreateDefaultTools()
-	workspace, err := filepath.Abs(".")
-	if err != nil {
-		return nil, nil, err
-	}
-	configPath := filepath.Join(workspace, ".agent", "mcp.yaml")
-	if _, err := os.Stat(configPath); err != nil {
-		if os.IsNotExist(err) {
-			return manager, func() {}, nil
-		}
-		return nil, nil, err
-	}
-	mcpTools, closeAll, err := LoadMCPTools(ctx, configPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, registered := range mcpTools {
-		if manager.GetTool(registered.Name()) != nil {
-			closeAll()
-			return nil, nil, fmt.Errorf("MCP tool name collision: %q", registered.Name())
-		}
-		manager.RegisterTool(registered)
-	}
-	return manager, closeAll, nil
 }

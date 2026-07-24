@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"MyCode/internal/message"
+	message "MyCode/internal/conversation"
 	"MyCode/internal/tool"
 )
 
@@ -316,7 +316,10 @@ func activePaths(messages []StoredMessage) []string {
 				continue
 			}
 			for key, value := range use.Arguments {
-				lower := strings.ToLower(key)
+				lower := strings.NewReplacer("_", "", "-", "").Replace(strings.ToLower(key))
+				if lower == "workingdirectory" {
+					continue
+				}
 				if !strings.Contains(lower, "path") && !strings.Contains(lower, "file") && !strings.Contains(lower, "directory") {
 					continue
 				}

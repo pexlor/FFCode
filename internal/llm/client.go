@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"MyCode/internal/message"
+	message "MyCode/internal/conversation"
 	"MyCode/internal/tool"
 	"context"
 	"fmt"

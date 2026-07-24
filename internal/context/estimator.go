@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"math"
 
-	"MyCode/internal/message"
+	message "MyCode/internal/conversation"
 	"MyCode/internal/tool"
 )
 

@@ -1,6 +1,7 @@
 package contextmanager
 
 import (
+	"MyCode/internal/conversation"
 	"context"
 	"errors"
 	"io"
@@ -8,12 +9,12 @@ import (
 
 var (
 	// ErrInvalidIdentifier 防止 Session ID 或 Artifact ID 被用于路径穿越。
-	ErrInvalidIdentifier = errors.New("invalid context identifier")
+	ErrInvalidIdentifier = conversation.ErrInvalidIdentifier
 	// ErrSummaryVersionConflict 表示提交摘要时 active version 已被其他写入推进。
 	ErrSummaryVersionConflict = errors.New("summary version conflict")
 	// ErrArtifactHashMismatch 表示归档正文与元数据中的 SHA256 不一致。
 	ErrArtifactHashMismatch = errors.New("tool artifact hash mismatch")
-	ErrSessionNotFound      = errors.New("session not found")
+	ErrSessionNotFound      = conversation.ErrStoreSessionNotFound
 	ErrSessionExists        = errors.New("session already exists")
 	ErrUnsafeSessionPath    = errors.New("unsafe session path")
 )
@@ -30,11 +31,6 @@ type ConversationStore interface {
 	CommitSummary(context.Context, SummarySnapshot, int) error
 }
 
-type SessionStore interface {
-	ConversationStore
-	CreateSession(context.Context, SessionMetadata) error
-	GetSession(context.Context, string) (SessionMetadata, error)
-	ListSessions(context.Context, string, int) ([]SessionMetadata, error)
-	RenameSession(context.Context, string, string) error
-	DeleteSession(context.Context, string) error
+func validIdentifier(value string) bool {
+	return conversation.ValidIdentifier(value)
 }

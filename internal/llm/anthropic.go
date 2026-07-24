@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"strings"
 
-	"MyCode/internal/message"
+	message "MyCode/internal/conversation"
 )
 
 const (

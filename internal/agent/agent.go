@@ -2,8 +2,8 @@ package agent
 
 import (
 	contextmanager "MyCode/internal/context"
+	message "MyCode/internal/conversation"
 	"MyCode/internal/llm"
-	"MyCode/internal/message"
 	"MyCode/internal/tool"
 	"context"
 	"errors"
