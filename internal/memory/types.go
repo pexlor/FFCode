@@ -106,6 +106,7 @@ type Store interface {
 	ListConsolidationInputs(context.Context, int, time.Time) ([]RawMemory, error)
 	ClaimConsolidation(context.Context, string, time.Duration) (ConsolidationClaim, error)
 	RenewConsolidation(context.Context, ConsolidationClaim, time.Duration) error
+	ReleaseConsolidation(context.Context, ConsolidationClaim) error
 	CommitSnapshot(context.Context, ConsolidationClaim, int, MemorySnapshot) error
 	ActiveSnapshot(context.Context) (*MemorySnapshot, error)
 	Summary(context.Context) (string, error)

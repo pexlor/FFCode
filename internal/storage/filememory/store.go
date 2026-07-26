@@ -246,6 +246,18 @@ func (s *Store) RenewConsolidation(ctx context.Context, claim memory.Consolidati
 	return writeJSONAtomic(s.consolidationLockPath(), claim)
 }
 
+func (s *Store) ReleaseConsolidation(ctx context.Context, claim memory.ConsolidationClaim) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.verifyConsolidation(claim); err != nil {
+		return err
+	}
+	return os.Remove(s.consolidationLockPath())
+}
+
 func (s *Store) CommitSnapshot(ctx context.Context, claim memory.ConsolidationClaim, expectedVersion int, snapshot memory.MemorySnapshot) error {
 	if err := ctx.Err(); err != nil {
 		return err

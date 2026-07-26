@@ -34,7 +34,7 @@ func LoadFile(path string, warnings io.Writer) (Config, error) {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	var result Config
+	result := Config{Memory: MemoryConfig{Generate: true, Use: true}}
 	if err := yaml.Unmarshal(data, &result); err != nil {
 		return Config{}, fmt.Errorf("decode config %s: %w", path, err)
 	}

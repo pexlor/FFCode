@@ -19,16 +19,17 @@ type TranscriptSource interface {
 }
 
 type Service struct {
-	Store       Store
-	Source      TranscriptSource
-	Extractor   Extractor
-	OwnerID     string
-	Workspace   string
-	MinIdle     time.Duration
-	LeaseTTL    time.Duration
-	MaxSessions int
-	Concurrency int
-	Now         func() time.Time
+	Store        Store
+	Source       TranscriptSource
+	Extractor    Extractor
+	Consolidator Consolidator
+	OwnerID      string
+	Workspace    string
+	MinIdle      time.Duration
+	LeaseTTL     time.Duration
+	MaxSessions  int
+	Concurrency  int
+	Now          func() time.Time
 
 	mu      sync.Mutex
 	running bool
@@ -100,7 +101,46 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		}(session, messages, candidate)
 	}
 	wait.Wait()
+	if s.Consolidator != nil {
+		if consolidateErr := s.RunConsolidationOnce(ctx); firstErr == nil {
+			firstErr = consolidateErr
+		}
+	}
 	return firstErr
+}
+
+func (s *Service) RunConsolidationOnce(ctx context.Context) error {
+	if s.Consolidator == nil {
+		return nil
+	}
+	claim, err := s.Store.ClaimConsolidation(ctx, s.OwnerID, time.Hour)
+	if err != nil {
+		return err
+	}
+	inputs, err := s.Store.ListConsolidationInputs(ctx, 200, time.Now())
+	if err != nil {
+		_ = s.Store.ReleaseConsolidation(ctx, claim)
+		return err
+	}
+	previous, err := s.Store.ActiveSnapshot(ctx)
+	if err != nil {
+		_ = s.Store.ReleaseConsolidation(ctx, claim)
+		return err
+	}
+	if len(inputs) == 0 {
+		return s.Store.ReleaseConsolidation(ctx, claim)
+	}
+	snapshot, err := s.Consolidator.Consolidate(ctx, ConsolidateRequest{Previous: previous, Inputs: inputs})
+	if err != nil {
+		_ = s.Store.ReleaseConsolidation(ctx, claim)
+		return err
+	}
+	expected := 0
+	if previous != nil {
+		expected = previous.Version
+	}
+	snapshot.Version = expected + 1
+	return s.Store.CommitSnapshot(ctx, claim, expected, snapshot)
 }
 
 func (s *Service) Start(ctx context.Context) context.CancelFunc {

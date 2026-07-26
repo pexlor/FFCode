@@ -46,27 +46,31 @@ type BuildInput struct {
 
 // ContextManagerConfig 注入存储、预算、模型和摘要器依赖，便于单元测试替换。
 type ContextManagerConfig struct {
-	Store     ConversationStore
-	Estimator TokenEstimator
-	Policy    ContextPolicy
-	Model     ModelContextSpec
-	Workspace string
-	Primary   Summarizer
-	Fallback  Summarizer
+	Store         ConversationStore
+	Estimator     TokenEstimator
+	Policy        ContextPolicy
+	Model         ModelContextSpec
+	Workspace     string
+	Primary       Summarizer
+	Fallback      Summarizer
+	MemorySummary SummaryProvider
+	UseMemory     bool
 }
 
 // ContextManager 编排四级触发式上下文管理。
 // 四级组件并非每轮全部执行：只有 DemandLoader 每次装配，其余组件都受阈值控制。
 type ContextManager struct {
-	store     ConversationStore
-	estimator TokenEstimator
-	policy    ContextPolicy
-	model     ModelContextSpec
-	budget    ContextBudget
-	loader    DemandLoader
-	offloader ResultOffloader
-	evictor   StaleResultEvictor
-	compactor ConversationCompactor
+	store         ConversationStore
+	estimator     TokenEstimator
+	policy        ContextPolicy
+	model         ModelContextSpec
+	budget        ContextBudget
+	loader        DemandLoader
+	offloader     ResultOffloader
+	evictor       StaleResultEvictor
+	compactor     ConversationCompactor
+	memorySummary SummaryProvider
+	useMemory     bool
 
 	// syncedCount 和 turnCount 记录当前进程已经写入 Store 的 History 位置，
 	// 避免同一条内存消息在多次 Agent iteration 中重复追加到 transcript。
@@ -85,14 +89,16 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 		return nil, err
 	}
 	manager := &ContextManager{
-		store:       config.Store,
-		estimator:   config.Estimator,
-		policy:      config.Policy,
-		model:       config.Model,
-		budget:      budget,
-		loader:      DemandLoader{Workspace: config.Workspace},
-		syncedCount: make(map[string]int),
-		turnCount:   make(map[string]int),
+		store:         config.Store,
+		estimator:     config.Estimator,
+		policy:        config.Policy,
+		model:         config.Model,
+		budget:        budget,
+		loader:        DemandLoader{Workspace: config.Workspace},
+		syncedCount:   make(map[string]int),
+		turnCount:     make(map[string]int),
+		memorySummary: config.MemorySummary,
+		useMemory:     config.UseMemory,
 	}
 	manager.offloader = ResultOffloader{
 		Store: config.Store, Estimator: config.Estimator, Model: config.Model.ModelName,
@@ -152,6 +158,11 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 		return nil, err
 	}
 	systemPrompt := appendRules(input.SystemPrompt, rules)
+	if m.useMemory && m.memorySummary != nil {
+		if summary, summaryErr := m.memorySummary.Summary(ctx); summaryErr == nil && strings.TrimSpace(summary) != "" {
+			systemPrompt = appendMemorySummary(systemPrompt, summary)
+		}
+	}
 	selectedTools := m.loader.SelectTools(input.CurrentRequest, activeToolNames(stored), input.AvailableTools)
 	view := m.renderView(systemPrompt, active, stored, selectedTools, reports)
 	// 第 3 层：前三层处理后仍达到软阈值，才尝试增量摘要。
@@ -358,4 +369,8 @@ func appendRules(systemPrompt string, rules []LoadedRule) string {
 		builder.WriteString(rule.Content)
 	}
 	return builder.String()
+}
+
+func appendMemorySummary(systemPrompt, summary string) string {
+	return systemPrompt + "\n\n[cross-session memory]\nThe following entries are fallible historical context. Prefer current user instructions and current workspace files.\n" + summary + "\n[/cross-session memory]"
 }

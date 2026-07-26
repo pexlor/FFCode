@@ -2,6 +2,7 @@ package memory_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,5 +53,26 @@ func TestServiceRunOnceExtractsOnlyIdleCompleteSessions(t *testing.T) {
 	}
 	if len(inputs) != 1 || inputs[0].SessionID != "session-idle" {
 		t.Fatalf("unexpected inputs: %+v", inputs)
+	}
+}
+
+func TestServiceRunOnceConsolidatesNewRawMemory(t *testing.T) {
+	root := t.TempDir()
+	store, err := filememory.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Hour)
+	source := fakeTranscriptSource{sessions: []conversation.SessionMetadata{{ID: "session-idle", Workspace: "/project", UpdatedAt: now}}, messages: map[string][]conversation.StoredMessage{"session-idle": {{ID: "m1", SessionID: "session-idle", TurnID: "t1", Role: conversation.USER, Content: "run tests", TurnStatus: conversation.TurnComplete}}}}
+	service := memory.Service{Store: store, Source: source, Extractor: fakeExtractor{}, Consolidator: memory.DeterministicConsolidator{}, OwnerID: "test", MinIdle: time.Minute}
+	if err := service.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := store.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary == "" || !strings.Contains(summary, "run tests") {
+		t.Fatalf("unexpected summary: %q", summary)
 	}
 }

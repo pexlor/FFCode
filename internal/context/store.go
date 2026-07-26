@@ -31,6 +31,12 @@ type ConversationStore interface {
 	CommitSummary(context.Context, SummarySnapshot, int) error
 }
 
+// SummaryProvider supplies already committed cross-session memory without
+// making ContextManager depend on a concrete memory storage implementation.
+type SummaryProvider interface {
+	Summary(context.Context) (string, error)
+}
+
 func validIdentifier(value string) bool {
 	return conversation.ValidIdentifier(value)
 }

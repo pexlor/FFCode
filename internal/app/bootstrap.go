@@ -6,9 +6,13 @@ import (
 	contextmanager "MyCode/internal/context"
 	session "MyCode/internal/conversation"
 	"MyCode/internal/llm"
+	"MyCode/internal/memory"
 	"MyCode/internal/storage/fileconversation"
+	filememory "MyCode/internal/storage/filememory"
 	"context"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 type runtime struct {
@@ -41,6 +45,41 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 	if err != nil {
 		return fail(err)
 	}
+	memoryRoot := config.Memory.Root
+	if strings.TrimSpace(memoryRoot) == "" {
+		memoryRoot = ".ffcode/memory"
+	}
+	if !filepath.IsAbs(memoryRoot) {
+		memoryRoot = filepath.Join(workspace, memoryRoot)
+	}
+	memoryStore, err := filememory.New(memoryRoot)
+	if err != nil {
+		return fail(err)
+	}
+	minIdle, err := time.ParseDuration(config.Memory.MinSessionIdle)
+	if err != nil {
+		return fail(err)
+	}
+	extractModel := config.Memory.ExtractModel
+	if extractModel == "" {
+		extractModel = config.Model.Name
+	}
+	consolidationModel := config.Memory.ConsolidationModel
+	if consolidationModel == "" {
+		consolidationModel = config.Model.Name
+	}
+	memoryService := &memory.Service{
+		Store: memoryStore, Source: store, OwnerID: "mycode-memory", Workspace: workspace,
+		Extractor:    memory.LLMExtractor{Client: client, Model: extractModel, PromptVersion: 1},
+		Consolidator: memory.LLMConsolidator{Client: client, Model: consolidationModel, Fallback: memory.DeterministicConsolidator{}},
+		MinIdle:      minIdle, MaxSessions: config.Memory.MaxSessionsPerRun, Concurrency: config.Memory.ExtractionConcurrency,
+	}
+	var memoryCancel func()
+	if config.Memory.Generate {
+		memoryCancel = memoryService.Start(ctx)
+	} else {
+		memoryCancel = func() {}
+	}
 
 	var primary contextmanager.Summarizer
 	if config.Summary.Model != "" {
@@ -63,9 +102,10 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 			ModelName: config.Model.Name, ContextWindow: config.Context.Window,
 			MaxOutputTokens: config.Context.OutputReserve,
 		},
-		Workspace: workspace,
-		Primary:   primary,
-		Fallback:  contextmanager.LLMSummarizer{Client: client},
+		Workspace:     workspace,
+		Primary:       primary,
+		Fallback:      contextmanager.LLMSummarizer{Client: client},
+		MemorySummary: memoryStore, UseMemory: config.Memory.Use,
 	})
 	if err != nil {
 		return fail(err)
@@ -73,9 +113,10 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 
 	sessions, err := session.NewService(store, workspace, systemPrompt)
 	if err != nil {
+		memoryCancel()
 		return fail(err)
 	}
-	return &runtime{runner: runner, contextManager: contextManager, sessions: sessions, cleanup: cleanup}, nil
+	return &runtime{runner: runner, contextManager: contextManager, sessions: sessions, cleanup: func() { memoryCancel(); cleanup() }}, nil
 }
 
 func modelParameters(model appconfig.ModelConfig) *llm.ModelParm {

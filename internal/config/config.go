@@ -14,6 +14,7 @@ type Config struct {
 	Model   ModelConfig   `yaml:"model"`
 	Summary SummaryConfig `yaml:"summary"`
 	Context ContextConfig `yaml:"context"`
+	Memory  MemoryConfig  `yaml:"memory"`
 }
 
 type ModelConfig struct {
@@ -38,6 +39,19 @@ type ContextConfig struct {
 	OutputReserve int `yaml:"output_reserve"`
 }
 
+type MemoryConfig struct {
+	Generate              bool   `yaml:"generate"`
+	Use                   bool   `yaml:"use"`
+	Root                  string `yaml:"root"`
+	MinSessionIdle        string `yaml:"min_session_idle"`
+	ExtractionConcurrency int    `yaml:"extraction_concurrency"`
+	MaxSessionsPerRun     int    `yaml:"max_sessions_per_run"`
+	SummaryTokenLimit     int    `yaml:"summary_token_limit"`
+	ExtractModel          string `yaml:"extract_model"`
+	ConsolidationModel    string `yaml:"consolidation_model"`
+	DisableOnExternal     bool   `yaml:"disable_on_external_context"`
+}
+
 func (c *Config) applyDefaults() {
 	if c.Context.Window == 0 {
 		c.Context.Window = DefaultContextWindow
@@ -47,6 +61,21 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Summary.Model != "" && strings.TrimSpace(c.Summary.BaseURL) == "" {
 		c.Summary.BaseURL = c.Model.BaseURL
+	}
+	if c.Memory.Root == "" {
+		c.Memory.Root = ".ffcode/memory"
+	}
+	if c.Memory.MinSessionIdle == "" {
+		c.Memory.MinSessionIdle = "30m"
+	}
+	if c.Memory.ExtractionConcurrency == 0 {
+		c.Memory.ExtractionConcurrency = 2
+	}
+	if c.Memory.MaxSessionsPerRun == 0 {
+		c.Memory.MaxSessionsPerRun = 100
+	}
+	if c.Memory.SummaryTokenLimit == 0 {
+		c.Memory.SummaryTokenLimit = 8000
 	}
 }
 
@@ -76,6 +105,9 @@ func (c Config) validate() error {
 	}
 	if c.Summary.Model != "" && strings.TrimSpace(c.Summary.APIKey) == "" {
 		return fmt.Errorf("summary.api_key is required when summary.model is set")
+	}
+	if c.Memory.ExtractionConcurrency <= 0 || c.Memory.MaxSessionsPerRun <= 0 || c.Memory.SummaryTokenLimit <= 0 {
+		return fmt.Errorf("memory limits must be positive")
 	}
 	return nil
 }

@@ -22,6 +22,13 @@ summary:
 context:
   window: 128000
   output_reserve: 8192
+memory:
+  generate: false
+  use: true
+  root: .memory-test
+  min_session_idle: 45m
+  extraction_concurrency: 3
+  summary_token_limit: 2048
 `)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -62,5 +69,27 @@ context:
 	}
 	if got.Context.Window != 128000 || got.Context.OutputReserve != 8192 {
 		t.Fatalf("context config was overridden by environment: %+v", got.Context)
+	}
+	if got.Memory.Generate || !got.Memory.Use || got.Memory.Root != ".memory-test" || got.Memory.MinSessionIdle != "45m" || got.Memory.ExtractionConcurrency != 3 || got.Memory.SummaryTokenLimit != 2048 {
+		t.Fatalf("memory config mismatch: %+v", got.Memory)
+	}
+}
+
+func TestMemoryConfigDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`model:
+  protocol: anthropic
+  base_url: https://example.com
+  api_key: key
+  name: model
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Memory.Generate || !got.Memory.Use || got.Memory.Root == "" || got.Memory.ExtractionConcurrency <= 0 {
+		t.Fatalf("unexpected defaults: %+v", got.Memory)
 	}
 }
