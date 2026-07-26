@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"MyCode/internal/memory"
 	"MyCode/internal/tool"
 )
 
@@ -74,6 +75,13 @@ func (l DemandLoader) LoadRules(activePaths []string) ([]LoadedRule, error) {
 		}
 		digest := sha256.Sum256(content)
 		rules = append(rules, LoadedRule{Path: candidate, Content: string(content), ContentHash: hex.EncodeToString(digest[:])})
+	}
+	knowledge, err := (memory.KnowledgeLoader{Workspace: workspace}).Load(activePaths)
+	if err != nil {
+		return nil, err
+	}
+	for _, document := range knowledge {
+		rules = append(rules, LoadedRule{Path: document.Path, Content: document.Content, ContentHash: document.ContentHash})
 	}
 	return rules, nil
 }
