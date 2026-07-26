@@ -2,6 +2,8 @@
 
 > 本文件保留最初的问题和需求草稿。已收敛的完整架构、数据模型、流程、错误处理、测试和实施阶段见 [DESIGN.md](./DESIGN.md)。
 
+当前实现状态：会话 Transcript 的有效前缀恢复、`AGENTS.md`/`RULES.md` 安全加载、文件型 RawMemory/租约/Snapshot Store、Phase 1 抽取、Phase 2 确定性或 LLM 整合，以及 ContextManager 的长期记忆注入已经落地。终端 `/memory` 管理命令、Session 软删除和自动清理仍未接入运行时。
+
 首先提出几个问题：
 1. 需要什么样的长期记忆？
 2. 何时进行记忆存储？
