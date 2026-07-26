@@ -127,7 +127,12 @@ func (s *Service) Resume(ctx context.Context, idOrPrefix string) (*CurrentSessio
 	if err != nil {
 		return nil, fmt.Errorf("load session %s: %w", metadata.ID, err)
 	}
-	manager := &MessageManager{SystemPrompt: s.systemPrompt, History: restoreMessages(stored)}
+	recovered := completeMessages(stored)
+	history := restoreMessages(recovered)
+	if len(stored) > len(recovered) || len(history) > 0 {
+		history = append(history, Message{Role: USER, Content: fmt.Sprintf("[context boundary: resumed session last activity %s; read current files for exact state]", metadata.UpdatedAt.Local().Format(time.RFC3339))})
+	}
+	manager := &MessageManager{SystemPrompt: s.systemPrompt, History: history}
 	next := &CurrentSession{ID: metadata.ID, Title: metadata.Title, CreatedAt: metadata.CreatedAt, UpdatedAt: metadata.UpdatedAt, Persisted: true, ExplicitTitle: metadata.Title != "" && metadata.Title != DefaultTitle, Messages: manager}
 	s.current = next
 	current := s.Current()
@@ -206,6 +211,19 @@ func restoreMessages(stored []StoredMessage) []Message {
 		result = append(result, converted)
 	}
 	return result
+}
+
+func completeMessages(stored []StoredMessage) []StoredMessage {
+	lastComplete := -1
+	for index, item := range stored {
+		if item.TurnStatus == TurnComplete {
+			lastComplete = index
+		}
+	}
+	if lastComplete < 0 {
+		return nil
+	}
+	return append([]StoredMessage(nil), stored[:lastComplete+1]...)
 }
 
 func normalizeOptionalTitle(title string) (string, bool, error) {

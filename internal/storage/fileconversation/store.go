@@ -3,7 +3,7 @@ package fileconversation
 import (
 	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
-	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -256,28 +256,39 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string) ([]StoredMes
 		return nil, ErrInvalidIdentifier
 	}
 	path := filepath.Join(s.root, sessionID, "transcript.jsonl")
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("open transcript: %w", err)
+		return nil, fmt.Errorf("read transcript: %w", err)
 	}
-	defer file.Close()
 	var messages []StoredMessage
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
+	lines := bytes.SplitAfter(data, []byte{'\n'})
+	for index, line := range lines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
 		var message StoredMessage
-		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil {
-			return nil, fmt.Errorf("decode transcript: %w", err)
+		if err := json.Unmarshal(line, &message); err != nil {
+			if quarantineErr := s.quarantineTranscriptTail(sessionID, bytes.Join(lines[index:], nil)); quarantineErr != nil {
+				return nil, fmt.Errorf("decode transcript: %w; quarantine tail: %v", err, quarantineErr)
+			}
+			break
 		}
 		messages = append(messages, message)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read transcript: %w", err)
-	}
 	return messages, nil
+}
+
+func (s *Store) quarantineTranscriptTail(sessionID string, tail []byte) error {
+	directory := filepath.Join(s.root, sessionID, "quarantine")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	name := filepath.Join(directory, fmt.Sprintf("transcript-%d.jsonl", time.Now().UnixNano()))
+	return writeFileAtomic(name, tail)
 }
 
 // ListMessagesAfter 只返回压缩检查点之后的消息。
