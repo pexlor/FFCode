@@ -102,16 +102,19 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 			ModelName: config.Model.Name, ContextWindow: config.Context.Window,
 			MaxOutputTokens: config.Context.OutputReserve,
 		},
-		Workspace:     workspace,
-		Primary:       primary,
-		Fallback:      contextmanager.LLMSummarizer{Client: client},
-		MemorySummary: memoryStore, UseMemory: config.Memory.Use,
+		Workspace: workspace,
+		Primary:   primary,
+		Fallback:  contextmanager.LLMSummarizer{Client: client},
 	})
 	if err != nil {
 		return fail(err)
 	}
 
-	sessions, err := session.NewService(store, workspace, systemPrompt)
+	sessions, err := session.NewService(store, workspace, session.SessionContext{
+		SystemPrompt: systemPrompt,
+		Memory:       memoryStore,
+		UseMemory:    config.Memory.Use,
+	})
 	if err != nil {
 		memoryCancel()
 		return fail(err)

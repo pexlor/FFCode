@@ -89,7 +89,7 @@ func Run(runtime Runtime) error {
 		}
 		renderer := newAgentEventRenderer(os.Stderr, os.Stdout)
 		turnContext, cancelTurn := context.WithCancel(context.Background())
-		events := runtime.Runner.RunContext(turnContext, runtime.Sessions.Current().Messages)
+		events := runtime.Runner.RunContext(turnContext, runtime.Sessions.Current())
 		interrupted, failed := consumeAgentEvents(events, interrupts, cancelTurn, renderer)
 		cancelTurn()
 		if interrupted {

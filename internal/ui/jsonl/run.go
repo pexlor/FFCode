@@ -14,12 +14,12 @@ import (
 )
 
 type TurnRunner interface {
-	RunContext(context.Context, *conversation.MessageManager) <-chan agent.AgentEvent
+	RunContext(context.Context, *conversation.Session) <-chan agent.AgentEvent
 }
 
 type SessionService interface {
 	AddUserMessage(context.Context, string) error
-	Current() conversation.CurrentSession
+	Current() *conversation.Session
 }
 
 type Runtime struct {
@@ -59,7 +59,7 @@ func Run(ctx context.Context, runtime Runtime) error {
 				return fmt.Errorf("encode turn start: %w", err)
 			}
 			terminalSeen := false
-			for event := range runtime.Runner.RunContext(ctx, current.Messages) {
+			for event := range runtime.Runner.RunContext(ctx, current) {
 				if _, ok := event.(agent.TurnEndEvent); ok {
 					if terminalSeen {
 						return errors.New("agent emitted multiple terminal events")

@@ -1,7 +1,7 @@
 package llm
 
 import (
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 	"MyCode/internal/tool"
 	"context"
 	"fmt"
@@ -16,7 +16,7 @@ type ToolCall struct {
 type StreamRequest struct {
 	Context      context.Context
 	SystemPrompt string
-	Messages     []message.Message
+	Messages     []conversation.Message
 	Tools        []*tool.ToolSchema
 }
 

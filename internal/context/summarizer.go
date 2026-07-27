@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 	"MyCode/internal/llm"
 )
 
@@ -32,7 +32,7 @@ func (s LLMSummarizer) Summarize(ctx context.Context, request SummarizeRequest) 
 		SystemPrompt: "You are a context compressor. Produce only factual structured task memory. " +
 			"Do not call tools, answer the user, invent facts, or include hidden reasoning. " +
 			"Preserve goals, constraints, decisions, changed files, command results, unresolved issues, artifact references, and next steps.",
-		Messages: []message.Message{{Role: message.USER, Content: string(payload)}},
+		Messages: []conversation.Message{{Role: conversation.USER, Content: string(payload)}},
 		Tools:    nil,
 	})
 	var builder strings.Builder

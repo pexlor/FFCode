@@ -33,35 +33,31 @@ type Store interface {
 	ListMessages(context.Context, string) ([]StoredMessage, error)
 }
 
-type CurrentSession struct {
-	ID            string
-	Title         string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	Persisted     bool
-	ExplicitTitle bool
-	Messages      *MessageManager
+type SessionContext struct {
+	SystemPrompt string
+	Memory       MemoryProvider
+	UseMemory    bool
 }
 
 type Service struct {
-	store        Store
-	workspace    string
-	systemPrompt string
-	current      *CurrentSession
+	store     Store
+	workspace string
+	context   SessionContext
+	current   *Session
 }
 
-func NewService(store Store, workspace, systemPrompt string) (*Service, error) {
+func NewService(store Store, workspace string, sessionContext SessionContext) (*Service, error) {
 	if store == nil || strings.TrimSpace(workspace) == "" {
 		return nil, errors.New("session store and workspace are required")
 	}
-	s := &Service{store: store, workspace: workspace, systemPrompt: systemPrompt}
+	s := &Service{store: store, workspace: workspace, context: sessionContext}
 	if _, err := s.New(context.Background(), ""); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
-func (s *Service) New(_ context.Context, title string) (*CurrentSession, error) {
+func (s *Service) New(_ context.Context, title string) (*Session, error) {
 	title, explicit, err := normalizeOptionalTitle(title)
 	if err != nil {
 		return nil, err
@@ -71,16 +67,16 @@ func (s *Service) New(_ context.Context, title string) (*CurrentSession, error) 
 		return nil, err
 	}
 	now := time.Now()
-	s.current = &CurrentSession{ID: id, Title: title, CreatedAt: now, UpdatedAt: now, ExplicitTitle: explicit, Messages: &MessageManager{SystemPrompt: s.systemPrompt}}
-	current := s.Current()
-	return &current, nil
+	s.current = &Session{
+		ID: id, Title: title, Workspace: s.workspace, CreatedAt: now, UpdatedAt: now,
+		ExplicitTitle: explicit, SystemPrompt: s.context.SystemPrompt,
+		memoryProvider: s.context.Memory, useMemory: s.context.UseMemory,
+	}
+	return s.current, nil
 }
 
-func (s *Service) Current() CurrentSession {
-	if s.current == nil {
-		return CurrentSession{}
-	}
-	return *s.current
+func (s *Service) Current() *Session {
+	return s.current
 }
 
 func (s *Service) AddUserMessage(ctx context.Context, content string) error {
@@ -97,7 +93,7 @@ func (s *Service) AddUserMessage(ctx context.Context, content string) error {
 		}
 		s.current.Persisted = true
 	}
-	s.current.Messages.AddText(content)
+	s.current.AddText(content)
 	s.current.UpdatedAt = time.Now()
 	return nil
 }
@@ -108,20 +104,19 @@ func (s *Service) List(ctx context.Context, limit int) ([]SessionMetadata, error
 		return nil, err
 	}
 	if s.current != nil && !s.current.Persisted {
-		current := SessionMetadata{ID: s.current.ID, Title: s.current.Title, Workspace: s.workspace, CreatedAt: s.current.CreatedAt, UpdatedAt: s.current.UpdatedAt, MessageCount: len(s.current.Messages.History)}
+		current := SessionMetadata{ID: s.current.ID, Title: s.current.Title, Workspace: s.workspace, CreatedAt: s.current.CreatedAt, UpdatedAt: s.current.UpdatedAt, MessageCount: len(s.current.History)}
 		items = append([]SessionMetadata{current}, items...)
 	}
 	return items, nil
 }
 
-func (s *Service) Resume(ctx context.Context, idOrPrefix string) (*CurrentSession, error) {
+func (s *Service) Resume(ctx context.Context, idOrPrefix string) (*Session, error) {
 	metadata, err := s.resolve(ctx, idOrPrefix)
 	if err != nil {
 		return nil, err
 	}
 	if s.current != nil && metadata.ID == s.current.ID {
-		current := s.Current()
-		return &current, nil
+		return s.current, nil
 	}
 	stored, err := s.store.ListMessages(ctx, metadata.ID)
 	if err != nil {
@@ -132,11 +127,14 @@ func (s *Service) Resume(ctx context.Context, idOrPrefix string) (*CurrentSessio
 	if len(stored) > len(recovered) || len(history) > 0 {
 		history = append(history, Message{Role: USER, Content: fmt.Sprintf("[context boundary: resumed session last activity %s; read current files for exact state]", metadata.UpdatedAt.Local().Format(time.RFC3339))})
 	}
-	manager := &MessageManager{SystemPrompt: s.systemPrompt, History: history}
-	next := &CurrentSession{ID: metadata.ID, Title: metadata.Title, CreatedAt: metadata.CreatedAt, UpdatedAt: metadata.UpdatedAt, Persisted: true, ExplicitTitle: metadata.Title != "" && metadata.Title != DefaultTitle, Messages: manager}
-	s.current = next
-	current := s.Current()
-	return &current, nil
+	s.current = &Session{
+		ID: metadata.ID, Title: metadata.Title, Workspace: metadata.Workspace,
+		CreatedAt: metadata.CreatedAt, UpdatedAt: metadata.UpdatedAt, Persisted: true,
+		ExplicitTitle: metadata.Title != "" && metadata.Title != DefaultTitle,
+		SystemPrompt:  s.context.SystemPrompt, History: history,
+		memoryProvider: s.context.Memory, useMemory: s.context.UseMemory,
+	}
+	return s.current, nil
 }
 
 func (s *Service) Delete(ctx context.Context, idOrPrefix string) error {
@@ -202,6 +200,9 @@ func restoreMessages(stored []StoredMessage) []Message {
 	result := make([]Message, 0, len(stored))
 	for _, item := range stored {
 		converted := Message{Role: item.Role, Content: item.Content}
+		for _, thinking := range item.Thinking {
+			converted.ThinkingBlocks = append(converted.ThinkingBlocks, ThinkingBlock{Thinking: thinking.Thinking, Signature: thinking.Signature})
+		}
 		for _, use := range item.ToolUses {
 			converted.ToolUses = append(converted.ToolUses, ToolUseBlock{ToolUseID: use.ToolUseID, ToolName: use.ToolName, Arguments: use.Arguments})
 		}

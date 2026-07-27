@@ -12,30 +12,28 @@ import (
 )
 
 type fakeSessions struct {
-	current  conversation.CurrentSession
+	current  *conversation.Session
 	messages []string
 }
 
 func newFakeSessions() *fakeSessions {
-	return &fakeSessions{current: conversation.CurrentSession{
-		ID: "session-1", Messages: &conversation.MessageManager{SystemPrompt: "system"},
-	}}
+	return &fakeSessions{current: &conversation.Session{ID: "session-1", SystemPrompt: "system"}}
 }
 
 func (s *fakeSessions) AddUserMessage(_ context.Context, content string) error {
 	s.messages = append(s.messages, content)
-	s.current.Messages.AddText(content)
+	s.current.AddText(content)
 	return nil
 }
 
-func (s *fakeSessions) Current() conversation.CurrentSession { return s.current }
+func (s *fakeSessions) Current() *conversation.Session { return s.current }
 
 type fakeTurnRunner struct {
 	responses [][]agent.AgentEvent
 	calls     int
 }
 
-func (r *fakeTurnRunner) RunContext(_ context.Context, _ *conversation.MessageManager) <-chan agent.AgentEvent {
+func (r *fakeTurnRunner) RunContext(_ context.Context, _ *conversation.Session) <-chan agent.AgentEvent {
 	ch := make(chan agent.AgentEvent, 16)
 	response := r.responses[r.calls]
 	r.calls++

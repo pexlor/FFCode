@@ -1,5 +1,7 @@
 package conversation
 
+import "context"
+
 // 工具调用
 type ToolUseBlock struct {
 	ToolUseID string
@@ -16,8 +18,8 @@ type ToolResultBlock struct {
 
 // 思考内容
 type ThinkingBlock struct {
-	Thinking string
-	// Signature string
+	Thinking  string
+	Signature string
 }
 
 type Message struct {
@@ -28,35 +30,46 @@ type Message struct {
 	ToolResults    []ToolResultBlock // 工具调用结果
 }
 
-// 消息管理
-type MessageManager struct {
-	SystemPrompt string
-	History      []Message // 顺序写入
+// MemoryProvider supplies the latest committed cross-session memory.
+type MemoryProvider interface {
+	Summary(context.Context) (string, error)
 }
 
-func (mm *MessageManager) AddToolUses(toolUses []ToolUseBlock) {
-	mm.History = append(mm.History, Message{
+func (s *Session) RefreshLongTermMemory(ctx context.Context) error {
+	if s == nil || !s.useMemory || s.memoryProvider == nil {
+		return nil
+	}
+	summary, err := s.memoryProvider.Summary(ctx)
+	if err != nil {
+		return err
+	}
+	s.LongTermMemory = summary
+	return nil
+}
+
+func (s *Session) AddToolUses(toolUses []ToolUseBlock) {
+	s.History = append(s.History, Message{
 		Role:     ASSISTANT,
 		ToolUses: toolUses,
 	})
 }
 
-func (mm *MessageManager) AddToolResult(toolResults []ToolResultBlock) {
-	mm.History = append(mm.History, Message{
+func (s *Session) AddToolResult(toolResults []ToolResultBlock) {
+	s.History = append(s.History, Message{
 		Role:        TOOL,
 		ToolResults: toolResults,
 	})
 }
 
-func (mm *MessageManager) AddThink(thinkingBlocks []ThinkingBlock) {
-	mm.History = append(mm.History, Message{
+func (s *Session) AddThink(thinkingBlocks []ThinkingBlock) {
+	s.History = append(s.History, Message{
 		Role:           ASSISTANT,
 		ThinkingBlocks: thinkingBlocks,
 	})
 }
 
-func (mm *MessageManager) AddText(content string) {
-	mm.History = append(mm.History, Message{
+func (s *Session) AddText(content string) {
+	s.History = append(s.History, Message{
 		Role:    USER,
 		Content: content,
 	})

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"math"
 
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 	"MyCode/internal/tool"
 )
 
 type TokenEstimator interface {
 	EstimateText(model, text string) int
-	EstimateMessages(model string, messages []message.Message) int
+	EstimateMessages(model string, messages []conversation.Message) int
 	EstimateTools(model string, tools []*tool.ToolSchema) int
 }
 
@@ -27,7 +27,7 @@ func (ConservativeEstimator) EstimateText(_ string, text string) int {
 	return int(math.Ceil(float64(len([]byte(text))) / 3 * 1.15))
 }
 
-func (e ConservativeEstimator) EstimateMessages(model string, messages []message.Message) int {
+func (e ConservativeEstimator) EstimateMessages(model string, messages []conversation.Message) int {
 	total := 0
 	for _, item := range messages {
 		data, _ := json.Marshal(item)

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 	"MyCode/internal/tool"
 )
 
@@ -27,7 +27,7 @@ type LayerReport struct {
 // 它可以包含摘要和 Artifact 引用，但不会反向覆盖 ConversationStore 中的原始事实。
 type ContextView struct {
 	SystemPrompt    string
-	Messages        []message.Message
+	Messages        []conversation.Message
 	Tools           []*tool.ToolSchema
 	EstimatedTokens int
 	Budget          ContextBudget
@@ -36,41 +36,35 @@ type ContextView struct {
 
 // BuildInput 汇总构建模型请求所需的运行时信息。
 type BuildInput struct {
-	SessionID      string
+	Session        *conversation.Session
 	CurrentTurnID  string
-	SystemPrompt   string
 	CurrentRequest string
-	History        []message.Message
 	AvailableTools []*tool.ToolSchema
 }
 
 // ContextManagerConfig 注入存储、预算、模型和摘要器依赖，便于单元测试替换。
 type ContextManagerConfig struct {
-	Store         ConversationStore
-	Estimator     TokenEstimator
-	Policy        ContextPolicy
-	Model         ModelContextSpec
-	Workspace     string
-	Primary       Summarizer
-	Fallback      Summarizer
-	MemorySummary SummaryProvider
-	UseMemory     bool
+	Store     ConversationStore
+	Estimator TokenEstimator
+	Policy    ContextPolicy
+	Model     ModelContextSpec
+	Workspace string
+	Primary   Summarizer
+	Fallback  Summarizer
 }
 
 // ContextManager 编排四级触发式上下文管理。
 // 四级组件并非每轮全部执行：只有 DemandLoader 每次装配，其余组件都受阈值控制。
 type ContextManager struct {
-	store         ConversationStore
-	estimator     TokenEstimator
-	policy        ContextPolicy
-	model         ModelContextSpec
-	budget        ContextBudget
-	loader        DemandLoader
-	offloader     ResultOffloader
-	evictor       StaleResultEvictor
-	compactor     ConversationCompactor
-	memorySummary SummaryProvider
-	useMemory     bool
+	store     ConversationStore
+	estimator TokenEstimator
+	policy    ContextPolicy
+	model     ModelContextSpec
+	budget    ContextBudget
+	loader    DemandLoader
+	offloader ResultOffloader
+	evictor   StaleResultEvictor
+	compactor ConversationCompactor
 
 	// syncedCount 和 turnCount 记录当前进程已经写入 Store 的 History 位置，
 	// 避免同一条内存消息在多次 Agent iteration 中重复追加到 transcript。
@@ -89,16 +83,14 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 		return nil, err
 	}
 	manager := &ContextManager{
-		store:         config.Store,
-		estimator:     config.Estimator,
-		policy:        config.Policy,
-		model:         config.Model,
-		budget:        budget,
-		loader:        DemandLoader{Workspace: config.Workspace},
-		syncedCount:   make(map[string]int),
-		turnCount:     make(map[string]int),
-		memorySummary: config.MemorySummary,
-		useMemory:     config.UseMemory,
+		store:       config.Store,
+		estimator:   config.Estimator,
+		policy:      config.Policy,
+		model:       config.Model,
+		budget:      budget,
+		loader:      DemandLoader{Workspace: config.Workspace},
+		syncedCount: make(map[string]int),
+		turnCount:   make(map[string]int),
 	}
 	manager.offloader = ResultOffloader{
 		Store: config.Store, Estimator: config.Estimator, Model: config.Model.ModelName,
@@ -116,26 +108,29 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 // 最关键的约束是：存在 active summary 时，只读取 CoveredThroughMessageID 之后的原文，
 // 因此已经压缩过的消息不会在下一轮再次进入模型，也不会被重复摘要。
 func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextView, error) {
-	if !validIdentifier(input.SessionID) {
+	if input.Session == nil || !validIdentifier(input.Session.ID) {
 		return nil, ErrInvalidIdentifier
 	}
-	if input.History != nil {
-		if err := m.syncHistory(ctx, input.SessionID, input.History); err != nil {
+	if err := input.Session.RefreshLongTermMemory(ctx); err != nil {
+		return nil, fmt.Errorf("load session memory: %w", err)
+	}
+	if input.Session.History != nil {
+		if err := m.syncHistory(ctx, input.Session.ID, input.Session.History); err != nil {
 			return nil, err
 		}
 	}
 	// active summary 与覆盖游标共同构成持久化压缩检查点。
-	active, err := m.store.ActiveSummary(ctx, input.SessionID)
+	active, err := m.store.ActiveSummary(ctx, input.Session.ID)
 	if err != nil {
 		return nil, err
 	}
-	stored, err := m.messagesForView(ctx, input.SessionID, active)
+	stored, err := m.messagesForView(ctx, input.Session.ID, active)
 	if err != nil {
 		return nil, err
 	}
 	// 第 1 层：新出现的大工具结果超过单项或批次阈值时才归档。
 	beforeTools := toolResultTokens(m.estimator, m.model.ModelName, stored)
-	stored, err = m.offloader.Process(ctx, input.SessionID, stored)
+	stored, err = m.offloader.Process(ctx, input.Session.ID, stored)
 	if err != nil {
 		return nil, err
 	}
@@ -157,32 +152,30 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	if err != nil {
 		return nil, err
 	}
-	systemPrompt := appendRules(input.SystemPrompt, rules)
-	if m.useMemory && m.memorySummary != nil {
-		if summary, summaryErr := m.memorySummary.Summary(ctx); summaryErr == nil && strings.TrimSpace(summary) != "" {
-			systemPrompt = appendMemorySummary(systemPrompt, summary)
-		}
+	systemPrompt := appendRules(input.Session.SystemPrompt, rules)
+	if strings.TrimSpace(input.Session.LongTermMemory) != "" {
+		systemPrompt = appendMemorySummary(systemPrompt, input.Session.LongTermMemory)
 	}
 	selectedTools := m.loader.SelectTools(input.CurrentRequest, activeToolNames(stored), input.AvailableTools)
 	view := m.renderView(systemPrompt, active, stored, selectedTools, reports)
 	// 第 3 层：前三层处理后仍达到软阈值，才尝试增量摘要。
 	// Compactor 内部还会检查是否存在足够的新完整 Turn，避免无意义地重复调用模型。
 	if view.EstimatedTokens >= m.budget.SoftCompactLimit {
-		current := SummarySnapshot{SessionID: input.SessionID}
+		current := SummarySnapshot{SessionID: input.Session.ID}
 		if active != nil {
 			current = *active
 		}
-		updated, changed, compactErr := m.compactor.Compact(ctx, input.SessionID, current, stored, max(1, m.budget.HardInputLimit/4))
+		updated, changed, compactErr := m.compactor.Compact(ctx, input.Session.ID, current, stored, max(1, m.budget.HardInputLimit/4))
 		if compactErr != nil {
 			return nil, compactErr
 		}
 		if changed {
 			// 摘要提交成功后立即从新游标之后重新读取，确保当前请求不再携带已覆盖原文。
-			stored, err = m.store.ListMessagesAfter(ctx, input.SessionID, updated.CoveredThroughMessageID)
+			stored, err = m.store.ListMessagesAfter(ctx, input.Session.ID, updated.CoveredThroughMessageID)
 			if err != nil {
 				return nil, err
 			}
-			stored, err = m.offloader.Process(ctx, input.SessionID, stored)
+			stored, err = m.offloader.Process(ctx, input.Session.ID, stored)
 			if err != nil {
 				return nil, err
 			}
@@ -206,9 +199,9 @@ func (m *ContextManager) messagesForView(ctx context.Context, sessionID string, 
 	return m.store.ListMessagesAfter(ctx, sessionID, active.CoveredThroughMessageID)
 }
 
-// syncHistory 把旧 MessageManager 的新增部分转换为持久化消息。
-// 这是迁移期兼容层：Store 是权威来源，MessageManager 只是当前进程缓存。
-func (m *ContextManager) syncHistory(ctx context.Context, sessionID string, history []message.Message) error {
+// syncHistory 把 Session 的新增部分转换为持久化消息。
+// Store 是权威来源，Session.History 是当前进程中的完整上下文缓存。
+func (m *ContextManager) syncHistory(ctx context.Context, sessionID string, history []conversation.Message) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	start, initialized := m.syncedCount[sessionID]
@@ -229,7 +222,7 @@ func (m *ContextManager) syncHistory(ctx context.Context, sessionID string, hist
 		m.syncedCount[sessionID] = start
 		turn := 0
 		for _, item := range existing {
-			if item.Role == message.USER {
+			if item.Role == conversation.USER {
 				turn++
 			}
 		}
@@ -245,7 +238,7 @@ func (m *ContextManager) syncHistory(ctx context.Context, sessionID string, hist
 	for index := start; index < len(history); index++ {
 		item := history[index]
 		// 每条 user 消息开启一个新 Turn；之后的工具调用、工具结果和最终回复共享该 TurnID。
-		if item.Role == message.USER {
+		if item.Role == conversation.USER {
 			turn++
 		}
 		if turn == 0 {
@@ -261,19 +254,22 @@ func (m *ContextManager) syncHistory(ctx context.Context, sessionID string, hist
 	return nil
 }
 
-// SyncHistory 在一次 Agent Run 结束后立即持久化最终 assistant 回复。
-func (m *ContextManager) SyncHistory(ctx context.Context, sessionID string, history []message.Message) error {
-	if !validIdentifier(sessionID) {
+// SyncSession 在一次 Agent Run 结束后立即持久化最终 assistant 回复。
+func (m *ContextManager) SyncSession(ctx context.Context, session *conversation.Session) error {
+	if session == nil || !validIdentifier(session.ID) {
 		return ErrInvalidIdentifier
 	}
-	return m.syncHistory(ctx, sessionID, history)
+	return m.syncHistory(ctx, session.ID, session.History)
 }
 
-// fromMessage 为旧消息生成稳定的 MessageID 和 TurnID，并识别最终 assistant 回复。
-func fromMessage(item message.Message, sessionID string, index, turn int) StoredMessage {
+// fromMessage 为 Session 消息生成稳定的 MessageID 和 TurnID，并识别最终 assistant 回复。
+func fromMessage(item conversation.Message, sessionID string, index, turn int) StoredMessage {
 	stored := StoredMessage{
 		ID: fmt.Sprintf("message-%06d", index), SessionID: sessionID,
 		TurnID: fmt.Sprintf("turn-%06d", turn), Role: item.Role, Content: item.Content, TurnStatus: TurnOpen,
+	}
+	for _, thinking := range item.ThinkingBlocks {
+		stored.Thinking = append(stored.Thinking, StoredThinkingBlock{Thinking: thinking.Thinking, Signature: thinking.Signature})
 	}
 	for _, use := range item.ToolUses {
 		stored.ToolUses = append(stored.ToolUses, StoredToolUse{ToolUseID: use.ToolUseID, ToolName: use.ToolName, Arguments: use.Arguments})
@@ -282,7 +278,7 @@ func fromMessage(item message.Message, sessionID string, index, turn int) Stored
 		stored.ToolResults = append(stored.ToolResults, StoredToolResult{ToolUseID: result.ToolUseID, Content: result.Content, IsError: result.IsError, State: ResultFull})
 	}
 	// 没有 ToolUse 的 assistant 消息表示本轮最终回复，至此整个 Turn 才允许压缩。
-	if item.Role == message.ASSISTANT && len(item.ToolUses) == 0 {
+	if item.Role == conversation.ASSISTANT && len(item.ToolUses) == 0 {
 		stored.TurnStatus = TurnComplete
 	}
 	return stored
@@ -290,18 +286,21 @@ func fromMessage(item message.Message, sessionID string, index, turn int) Stored
 
 // renderView 把持久化类型转换回模型协议类型，并在最前面注入已生效的任务摘要。
 func (m *ContextManager) renderView(systemPrompt string, active *SummarySnapshot, stored []StoredMessage, tools []*tool.ToolSchema, reports []LayerReport) *ContextView {
-	var messages []message.Message
+	var messages []conversation.Message
 	if active != nil && active.Content != "" {
 		// 边界提示强调摘要不是精确原文，需要细节时必须重新读取文件或 Artifact。
-		messages = append(messages, message.Message{Role: message.USER, Content: "[compacted task state]\n" + active.Content + "\n[context boundary: read files or artifacts for exact details]"})
+		messages = append(messages, conversation.Message{Role: conversation.USER, Content: "[compacted task state]\n" + active.Content + "\n[context boundary: read files or artifacts for exact details]"})
 	}
 	for _, item := range stored {
-		converted := message.Message{Role: item.Role, Content: item.Content}
+		converted := conversation.Message{Role: item.Role, Content: item.Content}
+		for _, thinking := range item.Thinking {
+			converted.ThinkingBlocks = append(converted.ThinkingBlocks, conversation.ThinkingBlock{Thinking: thinking.Thinking, Signature: thinking.Signature})
+		}
 		for _, use := range item.ToolUses {
-			converted.ToolUses = append(converted.ToolUses, message.ToolUseBlock{ToolUseID: use.ToolUseID, ToolName: use.ToolName, Arguments: use.Arguments})
+			converted.ToolUses = append(converted.ToolUses, conversation.ToolUseBlock{ToolUseID: use.ToolUseID, ToolName: use.ToolName, Arguments: use.Arguments})
 		}
 		for _, result := range item.ToolResults {
-			converted.ToolResults = append(converted.ToolResults, message.ToolResultBlock{ToolUseID: result.ToolUseID, Content: result.Content, IsError: result.IsError})
+			converted.ToolResults = append(converted.ToolResults, conversation.ToolResultBlock{ToolUseID: result.ToolUseID, Content: result.Content, IsError: result.IsError})
 		}
 		messages = append(messages, converted)
 	}

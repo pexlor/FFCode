@@ -1,6 +1,7 @@
 package contextmanager
 
 import (
+	"MyCode/internal/conversation"
 	"context"
 	"io"
 	"os"
@@ -43,10 +44,6 @@ func TestDemandLoaderLoadsProjectKnowledge(t *testing.T) {
 	}
 }
 
-type staticMemorySummary struct{ content string }
-
-func (s staticMemorySummary) Summary(context.Context) (string, error) { return s.content, nil }
-
 type fakeConversationStore struct{}
 
 func (fakeConversationStore) AppendMessage(context.Context, StoredMessage) error { return nil }
@@ -72,16 +69,30 @@ func TestContextManagerInjectsMemorySummaryWhenEnabled(t *testing.T) {
 		Store: fakeConversationStore{}, Estimator: ConservativeEstimator{},
 		Model:     ModelContextSpec{ModelName: "test", ContextWindow: 10000, MaxOutputTokens: 1000},
 		Policy:    DefaultPolicy(),
-		Workspace: t.TempDir(), MemorySummary: staticMemorySummary{content: "remember rg"}, UseMemory: true,
+		Workspace: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := manager.Build(context.Background(), BuildInput{SessionID: "session-1", SystemPrompt: "system", CurrentRequest: "hi", History: nil})
+	session := &conversation.Session{ID: "session-1", SystemPrompt: "system", LongTermMemory: "remember rg"}
+	view, err := manager.Build(context.Background(), BuildInput{Session: session, CurrentRequest: "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(view.SystemPrompt, "remember rg") {
 		t.Fatalf("memory summary missing: %q", view.SystemPrompt)
+	}
+}
+
+func TestMessageConversionPreservesThinkingBlocks(t *testing.T) {
+	message := conversation.Message{
+		Role:           conversation.ASSISTANT,
+		ThinkingBlocks: []conversation.ThinkingBlock{{Thinking: "reasoning", Signature: "signature"}},
+	}
+	stored := fromMessage(message, "session-1", 1, 1)
+	view := (&ContextManager{estimator: ConservativeEstimator{}, model: ModelContextSpec{ModelName: "test"}}).renderView("system", nil, []StoredMessage{stored}, nil, nil)
+	got := view.Messages[0].ThinkingBlocks
+	if len(got) != 1 || got[0] != message.ThinkingBlocks[0] {
+		t.Fatalf("thinking blocks = %#v", got)
 	}
 }

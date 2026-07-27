@@ -62,8 +62,8 @@ func Run(arguments []string, stdout, stderr io.Writer, version string) int {
 	}
 	defer runtime.cleanup()
 
-	onSessionChange := func(sessionID string) {
-		runtime.runner.SetContextManager(runtime.contextManager, sessionID)
+	onSessionChange := func(_ string) {
+		runtime.runner.SetContextManager(runtime.contextManager)
 	}
 	if options.OutputFormat == OutputJSONL {
 		err = jsonlui.Run(ctx, jsonlui.Runtime{

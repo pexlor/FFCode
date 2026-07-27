@@ -12,6 +12,7 @@ type TurnStatus = conversation.TurnStatus
 type ResultState = conversation.ResultState
 type StoredToolUse = conversation.StoredToolUse
 type StoredToolResult = conversation.StoredToolResult
+type StoredThinkingBlock = conversation.StoredThinkingBlock
 type StoredMessage = conversation.StoredMessage
 
 const (

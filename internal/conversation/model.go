@@ -14,6 +14,24 @@ type SessionMetadata struct {
 	FormatVersion int       `json:"format_version"`
 }
 
+// Session is the aggregate root for all model context belonging to one
+// conversation. History retains text, thinking, tool calls, and tool results.
+type Session struct {
+	ID             string
+	Title          string
+	Workspace      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	Persisted      bool
+	ExplicitTitle  bool
+	SystemPrompt   string
+	LongTermMemory string
+	History        []Message
+
+	memoryProvider MemoryProvider
+	useMemory      bool
+}
+
 type TurnStatus string
 
 const (
@@ -44,17 +62,23 @@ type StoredToolResult struct {
 	State      ResultState `json:"state,omitempty"`
 }
 
+type StoredThinkingBlock struct {
+	Thinking  string `json:"thinking"`
+	Signature string `json:"signature,omitempty"`
+}
+
 // StoredMessage is the durable transcript representation. Context compaction
 // may create views of it, but never owns or mutates the underlying fact model.
 type StoredMessage struct {
-	ID          string             `json:"id"`
-	SessionID   string             `json:"session_id"`
-	TurnID      string             `json:"turn_id"`
-	Iteration   int                `json:"iteration,omitempty"`
-	Role        string             `json:"role"`
-	Content     string             `json:"content,omitempty"`
-	ToolUses    []StoredToolUse    `json:"tool_uses,omitempty"`
-	ToolResults []StoredToolResult `json:"tool_results,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
-	TurnStatus  TurnStatus         `json:"turn_status,omitempty"`
+	ID          string                `json:"id"`
+	SessionID   string                `json:"session_id"`
+	TurnID      string                `json:"turn_id"`
+	Iteration   int                   `json:"iteration,omitempty"`
+	Role        string                `json:"role"`
+	Content     string                `json:"content,omitempty"`
+	Thinking    []StoredThinkingBlock `json:"thinking,omitempty"`
+	ToolUses    []StoredToolUse       `json:"tool_uses,omitempty"`
+	ToolResults []StoredToolResult    `json:"tool_results,omitempty"`
+	CreatedAt   time.Time             `json:"created_at"`
+	TurnStatus  TurnStatus            `json:"turn_status,omitempty"`
 }

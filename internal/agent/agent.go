@@ -2,7 +2,7 @@ package agent
 
 import (
 	contextmanager "MyCode/internal/context"
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 	"MyCode/internal/llm"
 	"MyCode/internal/tool"
 	"context"
@@ -20,7 +20,6 @@ type Agent struct {
 	client         llm.LLMClient
 	toolManager    *tool.ToolsManager
 	contextManager *contextmanager.ContextManager
-	sessionID      string
 	MaxIterations  int
 }
 
@@ -42,11 +41,8 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 	}, nil
 }
 
-func (a *Agent) SetContextManager(manager *contextmanager.ContextManager, sessionID string) {
-	// ContextManager 与 SessionID 成对设置：前者决定如何构建视图，后者决定从哪个
-	// transcript 和摘要检查点恢复上下文。
+func (a *Agent) SetContextManager(manager *contextmanager.ContextManager) {
 	a.contextManager = manager
-	a.sessionID = sessionID
 }
 
 // SetThinkingEnabled updates the mode used by subsequent model requests.
@@ -68,13 +64,13 @@ func (a *Agent) ThinkingEnabled() (bool, error) {
 }
 
 // Run executes the agent loop and emits events for upper-layer UI.
-func (a *Agent) Run(mm *message.MessageManager) <-chan AgentEvent {
-	return a.RunContext(agentContext(a), mm)
+func (a *Agent) Run(session *conversation.Session) <-chan AgentEvent {
+	return a.RunContext(agentContext(a), session)
 }
 
 // RunContext executes one agent turn with a caller-controlled context. This
 // lets an interactive UI interrupt an in-flight model request or tool call.
-func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-chan AgentEvent {
+func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <-chan AgentEvent {
 	agentEventCh := make(chan AgentEvent, 32)
 	if ctx == nil {
 		ctx = agentContext(a)
@@ -84,7 +80,7 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 		defer close(agentEventCh)
 		var totalUsage llm.UsageInfo
 
-		if err := a.validate(mm); err != nil {
+		if err := a.validate(session); err != nil {
 			sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
 			return
 		}
@@ -95,14 +91,13 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 
 		for iteration := 0; iteration < a.MaxIterations; iteration++ {
 			toolSchemas := a.toolManager.BuildAllSchemas()
-			systemPrompt := mm.SystemPrompt
-			history := mm.History
+			systemPrompt := session.SystemPrompt
+			history := session.History
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
 				// Build 内部通过同步游标避免重复写 transcript，并通过摘要检查点避免重复压缩。
 				view, err := a.contextManager.Build(ctx, contextmanager.BuildInput{
-					SessionID: a.sessionID, SystemPrompt: mm.SystemPrompt,
-					CurrentRequest: latestUserRequest(mm.History), History: mm.History,
+					Session: session, CurrentRequest: latestUserRequest(session.History),
 					AvailableTools: toolSchemas,
 				})
 				if err != nil {
@@ -115,6 +110,7 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 				toolSchemas = view.Tools
 			}
 			var assistantText, stopReason string
+			var thinkingBlocks []conversation.ThinkingBlock
 			var toolCalls []llm.ToolCallComplete
 			var usage llm.UsageInfo
 			for attempt := 0; ; attempt++ {
@@ -127,7 +123,7 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 				})
 
 				var err error
-				assistantText, toolCalls, stopReason, usage, err = a.handleStream(ctx, events, errs, agentEventCh)
+				assistantText, thinkingBlocks, toolCalls, stopReason, usage, err = a.handleStream(ctx, events, errs, agentEventCh)
 				if err == nil {
 					break
 				}
@@ -139,14 +135,15 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 			}
 
 			if len(toolCalls) == 0 {
-				if assistantText != "" {
-					mm.History = append(mm.History, message.Message{
-						Role:    message.ASSISTANT,
-						Content: assistantText,
+				if assistantText != "" || len(thinkingBlocks) > 0 {
+					session.History = append(session.History, conversation.Message{
+						Role:           conversation.ASSISTANT,
+						Content:        assistantText,
+						ThinkingBlocks: thinkingBlocks,
 					})
 				}
 				if a.contextManager != nil {
-					if err := a.contextManager.SyncHistory(ctx, a.sessionID, mm.History); err != nil {
+					if err := a.contextManager.SyncSession(ctx, session); err != nil {
 						sendTurnEndEvent(agentEventCh, turnEndFromError(err, addUsage(totalUsage, usage)))
 						return
 					}
@@ -156,14 +153,15 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 			}
 			totalUsage = addUsage(totalUsage, usage)
 
-			mm.History = append(mm.History, message.Message{
-				Role:     message.ASSISTANT,
-				Content:  assistantText,
-				ToolUses: toToolUseBlocks(toolCalls),
+			session.History = append(session.History, conversation.Message{
+				Role:           conversation.ASSISTANT,
+				Content:        assistantText,
+				ThinkingBlocks: thinkingBlocks,
+				ToolUses:       toToolUseBlocks(toolCalls),
 			})
 
 			toolResults := a.executeTools(ctx, toolCalls, agentEventCh)
-			mm.AddToolResult(toolResults)
+			session.AddToolResult(toolResults)
 		}
 
 		err := fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
@@ -207,21 +205,21 @@ func sendTurnEndEvent(ch chan<- AgentEvent, event TurnEndEvent) {
 	ch <- event
 }
 
-func latestUserRequest(history []message.Message) string {
+func latestUserRequest(history []conversation.Message) string {
 	// 工具循环会在用户消息后追加多条 assistant/tool 消息，因此必须逆序寻找最近用户请求。
 	for index := len(history) - 1; index >= 0; index-- {
-		if history[index].Role == message.USER {
+		if history[index].Role == conversation.USER {
 			return history[index].Content
 		}
 	}
 	return ""
 }
 
-func (a *Agent) run(mm *message.MessageManager) <-chan AgentEvent {
-	return a.Run(mm)
+func (a *Agent) run(session *conversation.Session) <-chan AgentEvent {
+	return a.Run(session)
 }
 
-func (a *Agent) validate(mm *message.MessageManager) error {
+func (a *Agent) validate(session *conversation.Session) error {
 	if a == nil {
 		return errors.New("agent cannot be nil")
 	}
@@ -234,8 +232,8 @@ func (a *Agent) validate(mm *message.MessageManager) error {
 	if a.toolManager == nil {
 		return errors.New("tool manager cannot be nil")
 	}
-	if mm == nil {
-		return errors.New("message manager cannot be nil")
+	if session == nil {
+		return errors.New("session cannot be nil")
 	}
 	if a.MaxIterations <= 0 {
 		return errors.New("max iterations must be greater than zero")
@@ -243,8 +241,9 @@ func (a *Agent) validate(mm *message.MessageManager) error {
 	return nil
 }
 
-func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent, errs <-chan error, out chan<- AgentEvent) (string, []llm.ToolCallComplete, string, llm.UsageInfo, error) {
+func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent, errs <-chan error, out chan<- AgentEvent) (string, []conversation.ThinkingBlock, []llm.ToolCallComplete, string, llm.UsageInfo, error) {
 	var assistantText strings.Builder
+	var thinkingBlocks []conversation.ThinkingBlock
 	var toolCalls []llm.ToolCallComplete
 	stopReason := ""
 	var usage llm.UsageInfo
@@ -262,6 +261,8 @@ func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent,
 				sendAgentEvent(ctx, out, TextEvent{Text: ev.Text})
 			case llm.ThinkingStream:
 				sendAgentEvent(ctx, out, ThinkingEvent{Text: ev.Text})
+			case llm.ThinkingComplete:
+				thinkingBlocks = append(thinkingBlocks, conversation.ThinkingBlock{Thinking: ev.Thinking, Signature: ev.Signature})
 			case llm.ToolCallStart:
 				sendAgentEvent(ctx, out, ToolCallStartEvent{ToolUseID: ev.ToolID, ToolName: ev.ToolName})
 			case llm.ToolCallStream:
@@ -279,14 +280,14 @@ func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent,
 				continue
 			}
 			if err != nil {
-				return assistantText.String(), toolCalls, stopReason, usage, err
+				return assistantText.String(), thinkingBlocks, toolCalls, stopReason, usage, err
 			}
 		case <-ctx.Done():
-			return assistantText.String(), toolCalls, stopReason, usage, ctx.Err()
+			return assistantText.String(), thinkingBlocks, toolCalls, stopReason, usage, ctx.Err()
 		}
 	}
 
-	return assistantText.String(), toolCalls, stopReason, usage, nil
+	return assistantText.String(), thinkingBlocks, toolCalls, stopReason, usage, nil
 }
 
 func addUsage(u, other llm.UsageInfo) llm.UsageInfo {
@@ -316,7 +317,7 @@ type completedToolCall struct {
 // executeTools starts every tool call in an iteration concurrently. Results are
 // returned in call order because tool-result protocols associate the response
 // sequence with the corresponding assistant tool-use sequence.
-func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, events chan<- AgentEvent) []message.ToolResultBlock {
+func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, events chan<- AgentEvent) []conversation.ToolResultBlock {
 	completed := make(chan completedToolCall, len(calls))
 	for index, call := range calls {
 		sendAgentEvent(ctx, events, ToolExecutionStartEvent{
@@ -328,7 +329,7 @@ func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, 
 		}(index, call)
 	}
 
-	results := make([]message.ToolResultBlock, len(calls))
+	results := make([]conversation.ToolResultBlock, len(calls))
 	for range calls {
 		var outcome completedToolCall
 		select {
@@ -336,7 +337,7 @@ func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, 
 		case <-ctx.Done():
 			return results
 		}
-		results[outcome.index] = message.ToolResultBlock{
+		results[outcome.index] = conversation.ToolResultBlock{
 			ToolUseID: outcome.call.ToolID,
 			Content:   outcome.result.Output,
 			IsError:   outcome.result.IsError,
@@ -351,10 +352,10 @@ func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, 
 	return results
 }
 
-func toToolUseBlocks(toolCalls []llm.ToolCallComplete) []message.ToolUseBlock {
-	toolUses := make([]message.ToolUseBlock, 0, len(toolCalls))
+func toToolUseBlocks(toolCalls []llm.ToolCallComplete) []conversation.ToolUseBlock {
+	toolUses := make([]conversation.ToolUseBlock, 0, len(toolCalls))
 	for _, call := range toolCalls {
-		toolUses = append(toolUses, message.ToolUseBlock{
+		toolUses = append(toolUses, conversation.ToolUseBlock{
 			ToolUseID: call.ToolID,
 			ToolName:  call.ToolName,
 			Arguments: call.Arguments,

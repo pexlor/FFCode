@@ -1,1 +1,0 @@
-ChatCompletionMessageToolCallUnionParam or ChatCompletionAssistantMessageParam

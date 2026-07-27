@@ -170,7 +170,7 @@ func runResume(ctx context.Context, commandContext *CommandContext, arguments st
 		return CommandResult{Err: err}
 	}
 	notifySessionChange(commandContext, current.ID)
-	fmt.Fprintf(commandContext.Out, "resumed %s  %s  %d messages\n", shortID(current.ID), current.Title, len(current.Messages.History))
+	fmt.Fprintf(commandContext.Out, "resumed %s  %s  %d messages\n", shortID(current.ID), current.Title, len(current.History))
 	return CommandResult{}
 }
 
@@ -215,7 +215,7 @@ func runCurrent(_ context.Context, commandContext *CommandContext, arguments str
 	if current.Persisted {
 		state = "persisted"
 	}
-	fmt.Fprintf(commandContext.Out, "id: %s\ntitle: %s\ncreated: %s\nupdated: %s\nmessages: %d\nstate: %s\n", current.ID, current.Title, formatTime(current.CreatedAt), formatTime(current.UpdatedAt), len(current.Messages.History), state)
+	fmt.Fprintf(commandContext.Out, "id: %s\ntitle: %s\ncreated: %s\nupdated: %s\nmessages: %d\nstate: %s\n", current.ID, current.Title, formatTime(current.CreatedAt), formatTime(current.UpdatedAt), len(current.History), state)
 	return CommandResult{}
 }
 

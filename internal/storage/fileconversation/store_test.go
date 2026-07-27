@@ -25,7 +25,8 @@ func TestStorePersistsSessionAndTranscript(t *testing.T) {
 	}
 	message := conversation.StoredMessage{
 		ID: "message-000001", SessionID: metadata.ID, TurnID: "turn-000001",
-		Role: conversation.USER, Content: "hello", TurnStatus: conversation.TurnOpen,
+		Role: conversation.ASSISTANT, Content: "hello", TurnStatus: conversation.TurnComplete,
+		Thinking: []conversation.StoredThinkingBlock{{Thinking: "reasoning", Signature: "signed"}},
 	}
 	if err := store.AppendMessage(ctx, message); err != nil {
 		t.Fatal(err)
@@ -35,7 +36,7 @@ func TestStorePersistsSessionAndTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Content != "hello" {
+	if len(got) != 1 || got[0].Content != "hello" || len(got[0].Thinking) != 1 || got[0].Thinking[0].Signature != "signed" {
 		t.Fatalf("messages = %#v, want one persisted message", got)
 	}
 }

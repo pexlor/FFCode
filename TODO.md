@@ -1,7 +1,7 @@
 # 系统优化
 1. 工具调用被权限系统拦截也要把信息返回给模型 done
 2. 工具注册有问题，模型对话表示没有一些工具（工具被拦截了） done
-3. 支持用户选择权限级别（）
+3. 支持用户选择权限级别（P1）
 4. 支持显示对话状态（思考？工具调用？）done
 5. ctrl + c 打断对话 / 非模型输出状态退出命令行 done
 6. ui 变好看一点（开头 + 对话框优化）done
@@ -16,6 +16,13 @@
 15. 开启think功能/内置命令支持开关 done
 16. 按上下键，可以跳出历史输入 done
 17. git 目录探测（找出完整项目根目录）done
+18. tool 的并发调用不在由 agent 控制，下沉到toolManager（控制粒度变细）
+19. 整体调用链： agent -> 写入 Session -> context 构造 -> llm -> session -> tool -> session
+    context 包含 Session ,当 Session 修改时更新 context 视图
+    agent应该完全不知道 Session 的存在只知道 context ，避免每次都要重建 context
+    context 也要持久化（利用Session id）,避免重启时还需要调用llm重建 context
+20. 提炼出agent-core，和ui分开（不在同一目录下）
+21. 系统提示词上移
 
 # 模块功能实现
 1. 长期记忆

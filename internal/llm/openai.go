@@ -1,7 +1,7 @@
 package llm
 
 import (
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -246,18 +246,18 @@ func buildChatCompletionMessages(req *StreamRequest) []openai.ChatCompletionMess
 	for _, m := range req.Messages {
 		// 添加 tool
 		switch m.Role {
-		case message.ASSISTANT:
+		case conversation.ASSISTANT:
 			// 模型生成的内容
 			if len(m.ToolUses) > 0 {
-				var message openai.ChatCompletionAssistantMessageParam
+				var assistantMessage openai.ChatCompletionAssistantMessageParam
 				if m.Content != "" {
-					message.Content.OfString = param.NewOpt(m.Content)
+					assistantMessage.Content.OfString = param.NewOpt(m.Content)
 				}
 				// 模型工具调用
 				for _, toolUse := range m.ToolUses {
 					argsJSON, _ := json.Marshal(toolUse.Arguments)
-					message.ToolCalls = append(
-						message.ToolCalls,
+					assistantMessage.ToolCalls = append(
+						assistantMessage.ToolCalls,
 						openai.ChatCompletionMessageToolCallUnionParam{
 							OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 								ID: toolUse.ToolUseID,
@@ -269,15 +269,15 @@ func buildChatCompletionMessages(req *StreamRequest) []openai.ChatCompletionMess
 						},
 					)
 				}
-				result = append(result, openai.ChatCompletionMessageParamUnion{OfAssistant: &message})
+				result = append(result, openai.ChatCompletionMessageParamUnion{OfAssistant: &assistantMessage})
 			} else if m.Content != "" {
 				result = append(result, openai.AssistantMessage(m.Content))
 			}
-		case message.TOOL:
+		case conversation.TOOL:
 			for _, toolResult := range m.ToolResults {
 				result = append(result, openai.ToolMessage(toolResult.Content, toolResult.ToolUseID))
 			}
-		case message.USER:
+		case conversation.USER:
 			result = append(result, openai.UserMessage(m.Content))
 		}
 	}

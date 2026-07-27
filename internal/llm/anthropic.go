@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"strings"
 
-	message "MyCode/internal/conversation"
+	"MyCode/internal/conversation"
 )
 
 const (
@@ -119,15 +119,17 @@ func buildAnthropicRequest(req *StreamRequest, parm *ModelParm) (anthropicReques
 	for _, msg := range req.Messages {
 		converted := anthropicMessage{}
 		switch msg.Role {
-		case message.USER:
+		case conversation.USER:
 			converted.Role = "user"
 			if msg.Content != "" {
 				converted.Content = append(converted.Content, anthropicContentBlock{Type: "text", Text: msg.Content})
 			}
-		case message.ASSISTANT:
+		case conversation.ASSISTANT:
 			converted.Role = "assistant"
 			for _, thinking := range msg.ThinkingBlocks {
-				converted.Content = append(converted.Content, anthropicContentBlock{Type: "thinking", Thinking: thinking.Thinking})
+				converted.Content = append(converted.Content, anthropicContentBlock{
+					Type: "thinking", Thinking: thinking.Thinking, Signature: thinking.Signature,
+				})
 			}
 			if msg.Content != "" {
 				converted.Content = append(converted.Content, anthropicContentBlock{Type: "text", Text: msg.Content})
@@ -135,7 +137,7 @@ func buildAnthropicRequest(req *StreamRequest, parm *ModelParm) (anthropicReques
 			for _, use := range msg.ToolUses {
 				converted.Content = append(converted.Content, anthropicContentBlock{Type: "tool_use", ID: use.ToolUseID, Name: use.ToolName, Input: use.Arguments})
 			}
-		case message.TOOL:
+		case conversation.TOOL:
 			converted.Role = "user"
 			for _, result := range msg.ToolResults {
 				converted.Content = append(converted.Content, anthropicContentBlock{Type: "tool_result", ToolUseID: result.ToolUseID, Content: result.Content, IsError: result.IsError})
