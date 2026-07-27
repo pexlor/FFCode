@@ -46,7 +46,7 @@
 
 以下问题来自复杂代码任务中的实际运行表现。`benchmark/swebench-lite-20260726/agent-problem-analysis-50-cases.md` 仅作为问题证据和回归数据，不作为 Agent 的专用设计目标。
 
-## P0：结构化运行协议
+## P0：结构化运行协议（已完成）
 
 1. 为 AgentEvent 提供稳定的机器可读输出协议，终端 UI、自动化调用方和评测工具都消费同一套结构化事件。
 2. 不再通过终端正文中的 `done:`、错误文案或 ANSI 渲染结果推断 Agent 状态。

@@ -26,6 +26,36 @@ PROMPT = (
 )
 
 
+class ProtocolEventParser:
+    """Incrementally extracts terminal events from MyCode protocol v1 JSONL."""
+
+    def __init__(self):
+        self.buffer = ""
+
+    def feed(self, text):
+        self.buffer += text
+        terminal_events = []
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            try:
+                event = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if event.get("version") != 1 or event.get("type") != "turn_finished":
+                continue
+            data = event.get("data")
+            if not isinstance(data, dict):
+                continue
+            status = data.get("status")
+            stop_reason = data.get("stop_reason")
+            if status not in ("completed", "incomplete", "failed", "cancelled"):
+                continue
+            if not isinstance(stop_reason, str):
+                continue
+            terminal_events.append({"status": status, "stop_reason": stop_reason})
+        return terminal_events
+
+
 def run_cmd(args, cwd=None, timeout=180):
     return subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, timeout=timeout, check=True).stdout
@@ -120,7 +150,7 @@ def run_instance(task, args):
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["PIP_NO_INDEX"] = "1"
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
-        process = subprocess.Popen([args.binary, "--cwd", str(worktree)], cwd=worktree,
+        process = subprocess.Popen([args.binary, "--cwd", str(worktree), "--output-format", "jsonl"], cwd=worktree,
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, env=env)
         log = log_path.open("wb")
@@ -129,8 +159,9 @@ def run_instance(task, args):
         deadline = time.time() + args.timeout
         output = bytearray()
         marker_buffer = ""
-        completed_turn = False
-        agent_failed = False
+        protocol_parser = ProtocolEventParser()
+        turn_status = ""
+        stop_reason = ""
         while process.poll() is None and time.time() < deadline:
             ready, _, _ = select.select([process.stdout], [], [], 1)
             if not ready:
@@ -147,12 +178,10 @@ def run_instance(task, args):
                 process.stdin.write(b"y\n")
                 process.stdin.flush()
                 marker_buffer = marker_buffer.rsplit("[y] Allow Once", 1)[-1]
-            if "done:" in text:
-                completed_turn = True
-                process.stdin.close()
-                break
-            if "执行失败:" in text or "terminal execution failed:" in text.lower():
-                agent_failed = True
+            terminal_events = protocol_parser.feed(text)
+            if terminal_events:
+                turn_status = terminal_events[-1]["status"]
+                stop_reason = terminal_events[-1]["stop_reason"]
                 process.stdin.close()
                 break
         timed_out = time.time() >= deadline
@@ -164,10 +193,14 @@ def run_instance(task, args):
                 process.wait()
         if timed_out:
             result["status"] = "timeout"
-        elif agent_failed or not completed_turn or process.returncode != 0:
+        elif process.returncode != 0 or not turn_status:
+            result["status"] = "agent_error"
+        elif turn_status == "failed":
             result["status"] = "agent_error"
         else:
-            result["status"] = "completed"
+            result["status"] = turn_status
+        if stop_reason:
+            result["stop_reason"] = stop_reason
         log.close()
         diff = subprocess.run(["git", "diff", "--binary", "--", "."], cwd=worktree,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False).stdout
@@ -200,7 +233,7 @@ def main():
     state_path = args.root / "agent-results.jsonl"
     state = load_state(state_path)
     pending = [task for task in tasks if state.get(task["instance_id"], {}).get("status") not in
-               ("completed", "agent_error", "timeout")]
+               ("completed", "incomplete", "failed", "cancelled", "agent_error", "timeout")]
     print(f"tasks={len(tasks)} pending={len(pending)} workers={args.workers}", flush=True)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(run_instance, task, args): task for task in pending}

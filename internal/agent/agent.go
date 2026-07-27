@@ -85,7 +85,11 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 		var totalUsage llm.UsageInfo
 
 		if err := a.validate(mm); err != nil {
-			sendAgentEvent(ctx, agentEventCh, ErrorEvent{Err: err})
+			sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
 			return
 		}
 
@@ -102,7 +106,7 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 					AvailableTools: toolSchemas,
 				})
 				if err != nil {
-					sendAgentEvent(ctx, agentEventCh, ErrorEvent{Err: err})
+					sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
 					return
 				}
 				// 从这里开始，LLM 只接触经过预算治理的视图，不再直接接触完整 History。
@@ -130,7 +134,7 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 				if errors.Is(err, llm.ErrMalformedToolInput) && attempt < malformedToolInputRetries {
 					continue
 				}
-				sendAgentEvent(ctx, agentEventCh, ErrorEvent{Err: err})
+				sendTurnEndEvent(agentEventCh, turnEndFromError(err, addUsage(totalUsage, usage)))
 				return
 			}
 
@@ -143,11 +147,11 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 				}
 				if a.contextManager != nil {
 					if err := a.contextManager.SyncHistory(ctx, a.sessionID, mm.History); err != nil {
-						sendAgentEvent(ctx, agentEventCh, ErrorEvent{Err: err})
+						sendTurnEndEvent(agentEventCh, turnEndFromError(err, addUsage(totalUsage, usage)))
 						return
 					}
 				}
-				sendAgentEvent(ctx, agentEventCh, DoneEvent{StopReason: stopReason, Usage: addUsage(totalUsage, usage)})
+				sendTurnEndEvent(agentEventCh, turnEndFromStopReason(stopReason, addUsage(totalUsage, usage)))
 				return
 			}
 			totalUsage = addUsage(totalUsage, usage)
@@ -162,10 +166,45 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 			mm.AddToolResult(toolResults)
 		}
 
-		sendAgentEvent(ctx, agentEventCh, ErrorEvent{Err: fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)})
+		err := fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
+		sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
 	}()
 
 	return agentEventCh
+}
+
+func turnEndFromStopReason(providerReason string, usage llm.UsageInfo) TurnEndEvent {
+	result := TurnEndEvent{ProviderReason: providerReason, Usage: usage}
+	switch strings.ToLower(strings.TrimSpace(providerReason)) {
+	case "end_turn", "stop", "stop_sequence":
+		result.Status = TurnCompleted
+		result.StopReason = StopEndTurn
+	case "max_tokens", "length":
+		result.Status = TurnIncomplete
+		result.StopReason = StopMaxTokens
+	default:
+		result.Status = TurnIncomplete
+		result.StopReason = StopAgentError
+	}
+	return result
+}
+
+func turnEndFromError(err error, usage llm.UsageInfo) TurnEndEvent {
+	result := TurnEndEvent{Status: TurnFailed, StopReason: StopAgentError, Usage: usage, Err: err}
+	switch {
+	case errors.Is(err, context.Canceled):
+		result.Status = TurnCancelled
+		result.StopReason = StopCancelled
+	case errors.Is(err, context.DeadlineExceeded):
+		result.StopReason = StopDeadlineExceeded
+	}
+	return result
+}
+
+// Terminal events must survive cancellation of the turn context. The channel
+// is buffered and the caller drains it until close, so one final send is safe.
+func sendTurnEndEvent(ch chan<- AgentEvent, event TurnEndEvent) {
+	ch <- event
 }
 
 func latestUserRequest(history []message.Message) string {

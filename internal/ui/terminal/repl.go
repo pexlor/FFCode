@@ -3,6 +3,7 @@ package terminal
 import (
 	"MyCode/internal/agent"
 	session "MyCode/internal/conversation"
+	"MyCode/internal/llm"
 	"bufio"
 	"context"
 	"errors"
@@ -87,28 +88,9 @@ func Run(runtime Runtime) error {
 			continue
 		}
 		renderer := newAgentEventRenderer(os.Stderr, os.Stdout)
-		failed := false
-		interrupted := false
 		turnContext, cancelTurn := context.WithCancel(context.Background())
 		events := runtime.Runner.RunContext(turnContext, runtime.Sessions.Current().Messages)
-	eventLoop:
-		for {
-			select {
-			case <-interrupts:
-				cancelTurn()
-				interrupted = true
-				break eventLoop
-			case event, ok := <-events:
-				if !ok {
-					break eventLoop
-				}
-				if err := renderer.render(event); err != nil {
-					printError("执行失败", err)
-					failed = true
-					break eventLoop
-				}
-			}
-		}
+		interrupted, failed := consumeAgentEvents(events, interrupts, cancelTurn, renderer)
 		cancelTurn()
 		if interrupted {
 			renderer.clearStatus()
@@ -118,6 +100,34 @@ func Run(runtime Runtime) error {
 		}
 		if failed {
 			continue
+		}
+	}
+}
+
+func consumeAgentEvents(
+	events <-chan agent.AgentEvent,
+	interrupts <-chan os.Signal,
+	cancelTurn func(),
+	renderer *agentEventRenderer,
+) (interrupted bool, failed bool) {
+	for {
+		select {
+		case <-interrupts:
+			if !interrupted {
+				cancelTurn()
+				interrupted = true
+			}
+		case event, ok := <-events:
+			if !ok {
+				return interrupted, false
+			}
+			if interrupted {
+				continue
+			}
+			if err := renderer.render(event); err != nil {
+				printError("执行失败", err)
+				return false, true
+			}
 		}
 	}
 }
@@ -175,15 +185,27 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 			color = colorRed
 		}
 		fmt.Fprintf(renderer.statusOut, "%s%s%s %s%s%s\n", colorDim, toolLine("完成", ev.ToolName), colorReset, color, status, colorReset)
+	case agent.TurnEndEvent:
+		renderer.clearStatus()
+		renderer.finishThinking()
+		renderer.renderAssistantMarkdown()
+		renderer.renderUsage(ev.Usage)
+		label := "done"
+		if ev.Status != agent.TurnCompleted {
+			label = string(ev.Status)
+		}
+		fmt.Fprintf(renderer.statusOut, "\n%s%s: %s%s\n\n", colorDim, label, ev.StopReason, colorReset)
+		if ev.Err != nil {
+			return ev.Err
+		}
+		if ev.Status == agent.TurnFailed || ev.Status == agent.TurnCancelled {
+			return fmt.Errorf("turn %s: %s", ev.Status, ev.StopReason)
+		}
 	case agent.DoneEvent:
 		renderer.clearStatus()
 		renderer.finishThinking()
 		renderer.renderAssistantMarkdown()
-		fmt.Fprintf(renderer.statusOut, "\n%stokens: input %d | output %d | total %d", colorDim, ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.TotalTokens)
-		if ev.Usage.CacheReadTokens > 0 {
-			fmt.Fprintf(renderer.statusOut, " | cache read %d", ev.Usage.CacheReadTokens)
-		}
-		fmt.Fprint(renderer.statusOut, colorReset)
+		renderer.renderUsage(ev.Usage)
 		if ev.StopReason != "" {
 			fmt.Fprintf(renderer.statusOut, "\n%sdone: %s%s\n\n", colorDim, ev.StopReason, colorReset)
 		} else {
@@ -193,6 +215,14 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 		return ev.Err
 	}
 	return nil
+}
+
+func (renderer *agentEventRenderer) renderUsage(usage llm.UsageInfo) {
+	fmt.Fprintf(renderer.statusOut, "\n%stokens: input %d | output %d | total %d", colorDim, usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+	if usage.CacheReadTokens > 0 {
+		fmt.Fprintf(renderer.statusOut, " | cache read %d", usage.CacheReadTokens)
+	}
+	fmt.Fprint(renderer.statusOut, colorReset)
 }
 
 func (renderer *agentEventRenderer) renderAssistantMarkdown() {

@@ -7,28 +7,35 @@ import (
 )
 
 type Options struct {
-	Workspace string
+	Workspace    string
+	OutputFormat string
 }
 
+const (
+	OutputText  = "text"
+	OutputJSONL = "jsonl"
+)
+
 func parseWorkspaceOption(arguments []string) (string, error) {
-	flags := flag.NewFlagSet("MyCode", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	cwd := flags.String("cwd", "", "workspace directory")
-	if err := flags.Parse(arguments); err != nil {
-		return "", err
-	}
-	if flags.NArg() != 0 {
-		return "", fmt.Errorf("unexpected argument %q", flags.Arg(0))
-	}
-	return *cwd, nil
+	options, err := parseOptions(arguments)
+	return options.Workspace, err
 }
 
 func parseOptions(arguments []string) (Options, error) {
-	workspace, err := parseWorkspaceOption(arguments)
-	if err != nil {
+	flags := flag.NewFlagSet("MyCode", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	cwd := flags.String("cwd", "", "workspace directory")
+	outputFormat := flags.String("output-format", OutputText, "output format: text or jsonl")
+	if err := flags.Parse(arguments); err != nil {
 		return Options{}, err
 	}
-	return Options{Workspace: workspace}, nil
+	if flags.NArg() != 0 {
+		return Options{}, fmt.Errorf("unexpected argument %q", flags.Arg(0))
+	}
+	if *outputFormat != OutputText && *outputFormat != OutputJSONL {
+		return Options{}, fmt.Errorf("unsupported output format %q", *outputFormat)
+	}
+	return Options{Workspace: *cwd, OutputFormat: *outputFormat}, nil
 }
 
 func validateStandaloneOption(arguments []string, name string) error {
@@ -43,11 +50,13 @@ func printUsage(out io.Writer) {
 
 Usage:
   MyCode [option]
-  MyCode --cwd <directory>
+  MyCode --cwd <directory> [--output-format text|jsonl]
 
 Options:
   -h, --help       Show this help message
   -v, --version    Show the MyCode version
       --cwd <dir>  Use an explicit workspace directory
+      --output-format <format>
+                   Output format: text (default) or jsonl
 `)
 }

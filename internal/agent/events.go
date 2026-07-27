@@ -4,6 +4,26 @@ import "MyCode/internal/llm"
 
 type AgentEvent interface{ agentEvent() }
 
+type TurnStatus string
+
+const (
+	TurnCompleted  TurnStatus = "completed"
+	TurnIncomplete TurnStatus = "incomplete"
+	TurnFailed     TurnStatus = "failed"
+	TurnCancelled  TurnStatus = "cancelled"
+)
+
+type StopReason string
+
+const (
+	StopEndTurn          StopReason = "end_turn"
+	StopMaxTokens        StopReason = "max_tokens"
+	StopCancelled        StopReason = "cancelled"
+	StopDeadlineExceeded StopReason = "deadline_exceeded"
+	StopProviderError    StopReason = "provider_error"
+	StopAgentError       StopReason = "agent_error"
+)
+
 type TextEvent struct {
 	Text string
 }
@@ -48,6 +68,16 @@ type ToolResultEvent struct {
 	IsError   bool
 }
 
+type TurnEndEvent struct {
+	Status         TurnStatus
+	StopReason     StopReason
+	ProviderReason string
+	Usage          llm.UsageInfo
+	Err            error
+}
+
+// DoneEvent and ErrorEvent remain for source compatibility. Agent.Run emits
+// TurnEndEvent so callers do not need to infer lifecycle state from event type.
 type DoneEvent struct {
 	StopReason string
 	Usage      llm.UsageInfo
@@ -65,5 +95,6 @@ func (ToolCallDeltaEvent) agentEvent()      {}
 func (ToolCallCompleteEvent) agentEvent()   {}
 func (ToolExecutionStartEvent) agentEvent() {}
 func (ToolResultEvent) agentEvent()         {}
+func (TurnEndEvent) agentEvent()            {}
 func (DoneEvent) agentEvent()               {}
 func (ErrorEvent) agentEvent()              {}

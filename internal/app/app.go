@@ -3,11 +3,13 @@ package app
 import (
 	appconfig "MyCode/internal/config"
 	"MyCode/internal/prompt"
+	jsonlui "MyCode/internal/ui/jsonl"
 	"MyCode/internal/ui/terminal"
 	workspacepath "MyCode/internal/workspace"
 	"context"
 	"fmt"
 	"io"
+	"os"
 )
 
 func Run(arguments []string, stdout, stderr io.Writer, version string) int {
@@ -60,15 +62,23 @@ func Run(arguments []string, stdout, stderr io.Writer, version string) int {
 	}
 	defer runtime.cleanup()
 
-	err = terminal.Run(terminal.Runtime{
-		ModelName: config.Model.Name,
-		Workspace: workspace,
-		Runner:    runtime.runner,
-		Sessions:  runtime.sessions,
-		OnSessionChange: func(sessionID string) {
-			runtime.runner.SetContextManager(runtime.contextManager, sessionID)
-		},
-	})
+	onSessionChange := func(sessionID string) {
+		runtime.runner.SetContextManager(runtime.contextManager, sessionID)
+	}
+	if options.OutputFormat == OutputJSONL {
+		err = jsonlui.Run(ctx, jsonlui.Runtime{
+			In: os.Stdin, Out: stdout, Runner: runtime.runner, Sessions: runtime.sessions,
+			OnSessionChange: onSessionChange,
+		})
+	} else {
+		err = terminal.Run(terminal.Runtime{
+			ModelName:       config.Model.Name,
+			Workspace:       workspace,
+			Runner:          runtime.runner,
+			Sessions:        runtime.sessions,
+			OnSessionChange: onSessionChange,
+		})
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "终端执行失败: %v\n", err)
 		return 1

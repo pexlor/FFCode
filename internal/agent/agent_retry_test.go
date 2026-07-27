@@ -41,9 +41,10 @@ func TestAgentRetriesMalformedToolInputOnce(t *testing.T) {
 	var done bool
 	for event := range agent.Run(messages) {
 		switch event := event.(type) {
-		case ErrorEvent:
-			t.Fatalf("unexpected agent error: %v", event.Err)
-		case DoneEvent:
+		case TurnEndEvent:
+			if event.Status != TurnCompleted {
+				t.Fatalf("unexpected terminal event: %+v", event)
+			}
 			done = true
 		}
 	}
@@ -65,15 +66,15 @@ func TestAgentDoesNotRetryMalformedToolInputTwice(t *testing.T) {
 	messages := &message.MessageManager{}
 	messages.AddText("fix the issue")
 
-	var agentErr error
+	var end TurnEndEvent
 	for event := range agent.Run(messages) {
-		if event, ok := event.(ErrorEvent); ok {
-			agentErr = event.Err
+		if event, ok := event.(TurnEndEvent); ok {
+			end = event
 		}
 	}
 
-	if !errors.Is(agentErr, llm.ErrMalformedToolInput) {
-		t.Fatalf("expected malformed tool input error, got %v", agentErr)
+	if end.Status != TurnFailed || !errors.Is(end.Err, llm.ErrMalformedToolInput) {
+		t.Fatalf("expected malformed tool input failure, got %+v", end)
 	}
 	if client.calls != 2 {
 		t.Fatalf("expected retry limit of 1, got %d attempts", client.calls)
