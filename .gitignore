@@ -1,5 +1,6 @@
 .worktrees/
 .context/
+.ffcode/
 cmd/FFCode/FFCode
 default.yaml
 .superpowers

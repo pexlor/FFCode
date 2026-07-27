@@ -20,6 +20,7 @@ type ToolPolicy struct {
 }
 
 type Policy struct {
+	Disabled       bool                  `yaml:"disabled"`
 	Default        PermissionDecision    `yaml:"default"`
 	Workspace      WorkspacePolicy       `yaml:"workspace"`
 	Tools          map[string]ToolPolicy `yaml:"tools"`

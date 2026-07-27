@@ -13,6 +13,8 @@ import (
 
 const DefaultMaxIterations = 800
 
+const malformedToolInputRetries = 1
+
 type Agent struct {
 	ctx            context.Context
 	client         llm.LLMClient
@@ -108,16 +110,26 @@ func (a *Agent) RunContext(ctx context.Context, mm *message.MessageManager) <-ch
 				history = view.Messages
 				toolSchemas = view.Tools
 			}
-			sendAgentEvent(ctx, agentEventCh, ThinkingStartEvent{})
-			events, errs := a.client.Stream(&llm.StreamRequest{
-				Context:      ctx,
-				SystemPrompt: systemPrompt,
-				Messages:     history,
-				Tools:        toolSchemas,
-			})
+			var assistantText, stopReason string
+			var toolCalls []llm.ToolCallComplete
+			var usage llm.UsageInfo
+			for attempt := 0; ; attempt++ {
+				sendAgentEvent(ctx, agentEventCh, ThinkingStartEvent{})
+				events, errs := a.client.Stream(&llm.StreamRequest{
+					Context:      ctx,
+					SystemPrompt: systemPrompt,
+					Messages:     history,
+					Tools:        toolSchemas,
+				})
 
-			assistantText, toolCalls, stopReason, usage, err := a.handleStream(ctx, events, errs, agentEventCh)
-			if err != nil {
+				var err error
+				assistantText, toolCalls, stopReason, usage, err = a.handleStream(ctx, events, errs, agentEventCh)
+				if err == nil {
+					break
+				}
+				if errors.Is(err, llm.ErrMalformedToolInput) && attempt < malformedToolInputRetries {
+					continue
+				}
 				sendAgentEvent(ctx, agentEventCh, ErrorEvent{Err: err})
 				return
 			}

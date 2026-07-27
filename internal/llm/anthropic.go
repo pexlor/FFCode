@@ -325,7 +325,7 @@ func (s *anthropicStreamState) consume(event anthropicSSEEvent) ([]StreamEvent, 
 			input := make(map[string]any)
 			if block.json != "" {
 				if err := json.Unmarshal([]byte(block.json), &input); err != nil {
-					return nil, false, fmt.Errorf("decode Anthropic tool %q input: %w", block.name, err)
+					return nil, false, fmt.Errorf("%w: decode Anthropic tool %q input: %v", ErrMalformedToolInput, block.name, err)
 				}
 			}
 			return []StreamEvent{ToolCallComplete{ToolID: block.id, ToolName: block.name, Arguments: input}}, false, nil

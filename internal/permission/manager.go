@@ -82,6 +82,10 @@ func (m *Manager) Authorize(ctx context.Context, req PermissionRequest) (result 
 		result = PermissionResult{Decision: Deny, Reason: err.Error()}
 		return
 	}
+	if m.policy.Disabled {
+		result = PermissionResult{Decision: Allow, Reason: "permission checks disabled"}
+		return
+	}
 	if strings.TrimSpace(req.ToolName) == "" {
 		result = PermissionResult{Decision: Deny, Reason: "tool name is required"}
 		return
