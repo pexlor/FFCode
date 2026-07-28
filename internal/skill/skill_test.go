@@ -1,11 +1,18 @@
 package skill
 
 import (
+	"MyCode/internal/tool"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestLoadToolDeclaresWriteAccess(t *testing.T) {
+	if access := (&LoadTool{}).Schema().Access; access != tool.ToolAccessWrite {
+		t.Fatalf("load_skill access = %q, want %q", access, tool.ToolAccessWrite)
+	}
+}
 
 func writeSkill(t *testing.T, root, relative, content string) {
 	t.Helper()
