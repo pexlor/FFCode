@@ -23,6 +23,7 @@ type Agent struct {
 	contextManager *contextmanager.ContextManager
 	skillManager   *skill.Manager
 	MaxIterations  int
+	RunBudget      RunBudget
 }
 
 func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.ToolsManager) (*Agent, error) {
@@ -40,6 +41,7 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 		client:        client,
 		toolManager:   toolManager,
 		MaxIterations: DefaultMaxIterations,
+		RunBudget:     DefaultRunBudget(),
 	}, nil
 }
 
@@ -77,6 +79,15 @@ func (a *Agent) Run(session *conversation.Session) <-chan AgentEvent {
 // RunContext executes one agent turn with a caller-controlled context. This
 // lets an interactive UI interrupt an in-flight model request or tool call.
 func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <-chan AgentEvent {
+	var budget RunBudget
+	if a != nil {
+		budget = a.RunBudget
+	}
+	return a.RunContextWithBudget(ctx, session, budget)
+}
+
+// RunContextWithBudget executes one turn with caller-supplied resource limits.
+func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.Session, budget RunBudget) <-chan AgentEvent {
 	agentEventCh := make(chan AgentEvent, 32)
 	if ctx == nil {
 		ctx = agentContext(a)
@@ -84,14 +95,20 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 
 	go func() {
 		defer close(agentEventCh)
-		var totalUsage llm.UsageInfo
+		budgetState, err := newRunBudgetState(budget)
+		if err != nil {
+			sendTurnEndEvent(agentEventCh, turnEndFromError(err, llm.UsageInfo{}))
+			return
+		}
+		ctx, cancel := budgetState.context(ctx)
+		defer cancel()
 
 		if err := a.validate(session); err != nil {
-			sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
+			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 			return
 		}
 		if err := ctx.Err(); err != nil {
-			sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
+			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 			return
 		}
 
@@ -111,7 +128,7 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 					AvailableTools: toolSchemas,
 				})
 				if err != nil {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
+					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 					return
 				}
 				// 从这里开始，LLM 只接触经过预算治理的视图，不再直接接触完整 History。
@@ -134,13 +151,17 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 
 				var err error
 				assistantText, thinkingBlocks, toolCalls, stopReason, usage, err = a.handleStream(ctx, events, errs, agentEventCh)
+				if budgetErr := budgetState.recordUsage(usage); budgetErr != nil {
+					sendTurnEndEvent(agentEventCh, turnEndFromError(budgetErr, budgetState.usage))
+					return
+				}
 				if err == nil {
 					break
 				}
 				if errors.Is(err, llm.ErrMalformedToolInput) && attempt < malformedToolInputRetries {
 					continue
 				}
-				sendTurnEndEvent(agentEventCh, turnEndFromError(err, addUsage(totalUsage, usage)))
+				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 				return
 			}
 
@@ -154,14 +175,17 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 				}
 				if a.contextManager != nil {
 					if err := a.contextManager.SyncSession(ctx, session); err != nil {
-						sendTurnEndEvent(agentEventCh, turnEndFromError(err, addUsage(totalUsage, usage)))
+						sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 						return
 					}
 				}
-				sendTurnEndEvent(agentEventCh, turnEndFromStopReason(stopReason, addUsage(totalUsage, usage)))
+				sendTurnEndEvent(agentEventCh, turnEndFromStopReason(stopReason, budgetState.usage))
 				return
 			}
-			totalUsage = addUsage(totalUsage, usage)
+			if err := budgetState.reserveToolCalls(len(toolCalls)); err != nil {
+				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+				return
+			}
 
 			session.History = append(session.History, conversation.Message{
 				Role:           conversation.ASSISTANT,
@@ -174,8 +198,8 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 			session.AddToolResult(toolResults)
 		}
 
-		err := fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
-		sendTurnEndEvent(agentEventCh, turnEndFromError(err, totalUsage))
+		err = fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
+		sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 	}()
 
 	return agentEventCh
@@ -234,6 +258,9 @@ func turnEndFromStopReason(providerReason string, usage llm.UsageInfo) TurnEndEv
 func turnEndFromError(err error, usage llm.UsageInfo) TurnEndEvent {
 	result := TurnEndEvent{Status: TurnFailed, StopReason: StopAgentError, Usage: usage, Err: err}
 	switch {
+	case errors.As(err, new(*budgetExceededError)):
+		result.Status = TurnIncomplete
+		result.StopReason = StopBudgetExceeded
 	case errors.Is(err, context.Canceled):
 		result.Status = TurnCancelled
 		result.StopReason = StopCancelled

@@ -21,6 +21,7 @@ const (
 	StopCancelled        StopReason = "cancelled"
 	StopDeadlineExceeded StopReason = "deadline_exceeded"
 	StopProviderError    StopReason = "provider_error"
+	StopBudgetExceeded   StopReason = "budget_exhausted"
 	StopAgentError       StopReason = "agent_error"
 )
 
