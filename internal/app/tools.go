@@ -65,6 +65,7 @@ func createTools(ctx context.Context, workspace string) (*tool.ToolsManager, fun
 }
 
 func allowDefaultTools(policy *permission.Policy) {
+	policy.Tools["load_skill"] = permission.ToolPolicy{Permission: permission.Allow}
 	policy.Tools["readfile"] = permission.ToolPolicy{Permission: permission.Allow, ToolPermission: permission.ToolPermission{ReadOnly: true}}
 	policy.Tools["bash"] = permission.ToolPolicy{Permission: permission.Allow, ToolPermission: permission.ToolPermission{CanWrite: true, CanDelete: true}}
 	policy.Tools["writefile"] = permission.ToolPolicy{Permission: permission.Allow, ToolPermission: permission.ToolPermission{CanWrite: true}}

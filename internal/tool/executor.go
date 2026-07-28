@@ -111,6 +111,9 @@ func buildPermissionRequest(name string, args map[string]any) permission.Permiss
 	request := permission.PermissionRequest{ToolName: name, Arguments: args}
 	lowerName := strings.ToLower(name)
 	switch {
+	case lowerName == "load_skill":
+		request.Action = "read"
+		request.RiskLevel = permission.Safe
 	case strings.Contains(lowerName, "read"), strings.Contains(lowerName, "grep"), strings.Contains(lowerName, "glob"):
 		request.Action = "read"
 		request.RiskLevel = permission.Safe

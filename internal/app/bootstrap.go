@@ -7,9 +7,11 @@ import (
 	session "MyCode/internal/conversation"
 	"MyCode/internal/llm"
 	"MyCode/internal/memory"
+	"MyCode/internal/skill"
 	"MyCode/internal/storage/fileconversation"
 	filememory "MyCode/internal/storage/filememory"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -41,6 +43,20 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 	if err != nil {
 		return fail(err)
 	}
+	registry := skill.NewRegistry(defaultSkillSources(workspace))
+	if err := registry.Reload(); err != nil {
+		return fail(err)
+	}
+	skillManager := skill.NewManager(registry, func(name string) bool {
+		for _, schema := range tools.BuildAllSchemas() {
+			if strings.EqualFold(schema.Name, name) {
+				return true
+			}
+		}
+		return false
+	})
+	tools.RegisterTool(&skill.LoadTool{Manager: skillManager})
+	runner.SetSkillManager(skillManager)
 	store, err := fileconversation.New(filepath.Join(workspace, ".context", "sessions"))
 	if err != nil {
 		return fail(err)
@@ -120,6 +136,17 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 		return fail(err)
 	}
 	return &runtime{runner: runner, contextManager: contextManager, sessions: sessions, cleanup: func() { memoryCancel(); cleanup() }}, nil
+}
+
+func defaultSkillSources(workspace string) []skill.Source {
+	sources := []skill.Source{{Scope: skill.Project, Root: filepath.Join(workspace, ".agent", "skills")}}
+	if userConfig, err := os.UserConfigDir(); err == nil {
+		sources = append(sources, skill.Source{Scope: skill.User, Root: filepath.Join(userConfig, "mycode", "skills")})
+	}
+	if executable, err := os.Executable(); err == nil {
+		sources = append(sources, skill.Source{Scope: skill.Builtin, Root: filepath.Join(filepath.Dir(executable), "skills")})
+	}
+	return sources
 }
 
 func modelParameters(model appconfig.ModelConfig) *llm.ModelParm {

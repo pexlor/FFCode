@@ -4,6 +4,7 @@ import (
 	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
 	"MyCode/internal/llm"
+	"MyCode/internal/skill"
 	"MyCode/internal/tool"
 	"context"
 	"errors"
@@ -20,6 +21,7 @@ type Agent struct {
 	client         llm.LLMClient
 	toolManager    *tool.ToolsManager
 	contextManager *contextmanager.ContextManager
+	skillManager   *skill.Manager
 	MaxIterations  int
 }
 
@@ -44,6 +46,10 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 func (a *Agent) SetContextManager(manager *contextmanager.ContextManager) {
 	a.contextManager = manager
 }
+
+// SetSkillManager enables metadata-only Skill catalog injection and active
+// Skill SOP/tool filtering for subsequent model requests.
+func (a *Agent) SetSkillManager(manager *skill.Manager) { a.skillManager = manager }
 
 // SetThinkingEnabled updates the mode used by subsequent model requests.
 func (a *Agent) SetThinkingEnabled(enabled bool) error {
@@ -92,6 +98,10 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 		for iteration := 0; iteration < a.MaxIterations; iteration++ {
 			toolSchemas := a.toolManager.BuildAllSchemas()
 			systemPrompt := session.SystemPrompt
+			if a.skillManager != nil {
+				systemPrompt = appendSkillPrompt(systemPrompt, a.skillManager.CatalogPrompt(), a.skillManager.Instructions())
+				toolSchemas = filterSkillTools(toolSchemas, a.skillManager.AllowedTools())
+			}
 			history := session.History
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
@@ -169,6 +179,40 @@ func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <
 	}()
 
 	return agentEventCh
+}
+
+func appendSkillPrompt(base string, sections ...string) string {
+	for _, section := range sections {
+		section = strings.TrimSpace(section)
+		if section == "" {
+			continue
+		}
+		if strings.TrimSpace(base) != "" {
+			base += "\n\n"
+		}
+		base += section
+	}
+	return base
+}
+
+func filterSkillTools(schemas []*tool.ToolSchema, allowed map[string]struct{}) []*tool.ToolSchema {
+	if allowed == nil {
+		return schemas
+	}
+	filtered := make([]*tool.ToolSchema, 0, len(schemas))
+	for _, schema := range schemas {
+		if schema == nil {
+			continue
+		}
+		if schema.Name == skill.LoadToolName {
+			filtered = append(filtered, schema)
+			continue
+		}
+		if _, ok := allowed[strings.ToLower(schema.Name)]; ok {
+			filtered = append(filtered, schema)
+		}
+	}
+	return filtered
 }
 
 func turnEndFromStopReason(providerReason string, usage llm.UsageInfo) TurnEndEvent {
