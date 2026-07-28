@@ -374,6 +374,13 @@ func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, 
 	}
 
 	results := make([]conversation.ToolResultBlock, len(calls))
+	for index, call := range calls {
+		results[index] = conversation.ToolResultBlock{
+			ToolUseID: call.ToolID,
+			Content:   "tool execution canceled",
+			IsError:   true,
+		}
+	}
 	for range calls {
 		var outcome completedToolCall
 		select {

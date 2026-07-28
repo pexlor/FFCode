@@ -49,6 +49,12 @@
 
 ● 执行失败: active path is outside workspace
 
+2. Anthropic 工具结果 ID 丢失导致后续请求持续返回 400（已修复）
+   - 现象：远程命令等待密码等交互输入时中断当前 Turn，后续请求持续返回 `tool result's tool id() not found (2013)`。
+   - 根因：并发工具执行等待期间收到 context cancellation 时，`executeTools` 返回了尚未填充的预分配结果，产生空 `ToolUseID` 并污染会话历史。
+   - 修复：预先为每个结果保留原始 `ToolUseID` 和取消错误，已完成的工具结果再覆盖对应位置。
+   - 回归：增加工具执行取消测试，并通过 `go test ./...` 和 `go test -race ./internal/agent`。
+
 # Agent 核心能力优化
 
 以下问题来自复杂代码任务中的实际运行表现。`benchmark/swebench-lite-20260726/agent-problem-analysis-50-cases.md` 仅作为问题证据和回归数据，不作为 Agent 的专用设计目标。
