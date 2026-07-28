@@ -26,6 +26,7 @@ type Agent struct {
 	ProviderRetryPolicy   llm.RetryPolicy
 	ProgressPolicy        ProgressPolicy
 	ProgressFingerprinter ProgressFingerprinter
+	CheckpointStore       CheckpointStore
 }
 
 func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.ToolsManager) (*Agent, error) {
@@ -118,6 +119,17 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 			return
 		}
+		recoveryGuidance, err := a.recoverCheckpoint(ctx, session, fingerprinter)
+		if err != nil {
+			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+			return
+		}
+		runCompleted := false
+		defer func() {
+			if !runCompleted && ctx.Err() != nil {
+				a.saveInterruptedCheckpoint(session, fingerprinter)
+			}
+		}()
 		if err := ctx.Err(); err != nil {
 			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 			return
@@ -134,6 +146,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			}
 			systemPrompt = appendSkillPrompt(systemPrompt, runPhaseGuidance(phaseController.phase()))
 			systemPrompt = appendSkillPrompt(systemPrompt, progressTracker.convergenceGuidance())
+			systemPrompt = appendSkillPrompt(systemPrompt, recoveryGuidance)
 			history := session.History
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
@@ -211,6 +224,11 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 						return
 					}
 				}
+				if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointCompleted, nil, nil, true); err != nil {
+					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					return
+				}
+				runCompleted = true
 				sendTurnEndEvent(agentEventCh, turnEndFromStopReason(stopReason, budgetState.usage))
 				return
 			}
@@ -233,9 +251,17 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				ThinkingBlocks: thinkingBlocks,
 				ToolUses:       toToolUseBlocks(toolCalls),
 			})
+			if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointModel, toolCalls, nil, false); err != nil {
+				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+				return
+			}
 
 			toolResults := a.executeToolsWithBlocked(ctx, toolCalls, blocked, agentEventCh)
 			session.AddToolResult(toolResults)
+			if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointTools, nil, completedToolIDs(toolCalls), false); err != nil {
+				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+				return
+			}
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolResults(toolCalls, phaseToolResults(toolResults)))
 
 			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
@@ -252,6 +278,11 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				case ProgressFinalize:
 					emitPhaseTransition(ctx, agentEventCh, phaseController.transition(PhaseFinalize, PhaseReasonNoProgress))
 				case ProgressStop:
+					if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointCompleted, nil, completedToolIDs(toolCalls), true); err != nil {
+						sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+						return
+					}
+					runCompleted = true
 					sendTurnEndEvent(agentEventCh, TurnEndEvent{Status: TurnIncomplete, StopReason: StopNoProgress, ProviderReason: string(StopNoProgress), Usage: budgetState.usage})
 					return
 				case ProgressNone, ProgressWarning, ProgressToolBlocked:

@@ -8,6 +8,7 @@ import (
 	"MyCode/internal/llm"
 	"MyCode/internal/memory"
 	"MyCode/internal/skill"
+	"MyCode/internal/storage/filecheckpoint"
 	"MyCode/internal/storage/fileconversation"
 	filememory "MyCode/internal/storage/filememory"
 	"context"
@@ -43,6 +44,11 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 	if err != nil {
 		return fail(err)
 	}
+	checkpointStore, err := filecheckpoint.New(filepath.Join(workspace, ".context", "checkpoints"))
+	if err != nil {
+		return fail(err)
+	}
+	runner.CheckpointStore = checkpointStore
 	registry := skill.NewRegistry(defaultSkillSources(workspace))
 	if err := registry.Reload(); err != nil {
 		return fail(err)
