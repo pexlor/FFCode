@@ -1,5 +1,7 @@
+import argparse
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -7,6 +9,53 @@ import watch_evaluator
 
 
 class WatchEvaluatorTest(unittest.TestCase):
+    def test_evaluates_pending_with_bounded_concurrency(self):
+        lock = threading.Lock()
+        barrier = threading.Barrier(2)
+        active = 0
+        maximum_active = 0
+
+        def evaluate(item, args):
+            nonlocal active, maximum_active
+            with lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            barrier.wait(timeout=2)
+            with lock:
+                active -= 1
+            return {"instance_id": item["instance_id"], "status": "resolved"}
+
+        args = argparse.Namespace(workers=2)
+        pending = [{"instance_id": f"case-{index}"} for index in range(4)]
+
+        results = list(watch_evaluator.evaluate_pending(pending, args, evaluate=evaluate))
+
+        self.assertEqual(maximum_active, 2)
+        self.assertEqual(
+            {item["instance_id"] for item in results},
+            {item["instance_id"] for item in pending},
+        )
+
+    def test_worker_exception_becomes_evaluator_error(self):
+        def evaluate(item, args):
+            if item["instance_id"] == "broken":
+                raise RuntimeError("boom")
+            return {"instance_id": item["instance_id"], "status": "resolved"}
+
+        args = argparse.Namespace(workers=2)
+        results = list(
+            watch_evaluator.evaluate_pending(
+                [{"instance_id": "broken"}, {"instance_id": "working"}],
+                args,
+                evaluate=evaluate,
+            )
+        )
+        by_id = {item["instance_id"]: item for item in results}
+
+        self.assertEqual(by_id["working"]["status"], "resolved")
+        self.assertEqual(by_id["broken"]["status"], "evaluator_error")
+        self.assertIn("RuntimeError('boom')", by_id["broken"]["error"])
+
     def test_classifies_new_results_without_repeating_completed_evaluations(self):
         with tempfile.TemporaryDirectory() as directory:
             patch = Path(directory) / "case.patch"

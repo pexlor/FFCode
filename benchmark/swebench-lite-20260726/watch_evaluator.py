@@ -2,6 +2,7 @@
 """Evaluate SWE-bench predictions as MyCode finishes each instance."""
 
 import argparse
+import concurrent.futures
 import json
 import os
 import subprocess
@@ -117,6 +118,24 @@ def evaluate_instance(result, args):
     }
 
 
+def evaluate_pending(pending, args, evaluate=evaluate_instance):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(evaluate, item, args): item for item in pending}
+        for future in concurrent.futures.as_completed(futures):
+            item = futures[future]
+            try:
+                yield future.result()
+            except Exception as exc:
+                yield {
+                    "instance_id": item["instance_id"],
+                    "status": "evaluator_error",
+                    "resolved": False,
+                    "agent_status": item.get("status"),
+                    "patch_bytes": item.get("patch_bytes", 0),
+                    "error": repr(exc),
+                }
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent-state", type=Path, default=Path("/tmp/mycode-swe-full/agent-results.jsonl"))
@@ -134,7 +153,11 @@ def parse_args():
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--retry-delay", type=int, default=30)
     parser.add_argument("--expected", type=int, default=300)
-    return parser.parse_args()
+    parser.add_argument("--workers", type=int, default=1)
+    args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
+    return args
 
 
 def main():
@@ -159,9 +182,9 @@ def main():
             save_jsonl(state_path, evaluated)
             print(json.dumps(evaluated[instance_id], ensure_ascii=False), flush=True)
         for item in pending:
-            print(f"evaluating={item['instance_id']}", flush=True)
-            evaluation = evaluate_instance(item, args)
-            evaluated[item["instance_id"]] = evaluation
+            print(f"queued={item['instance_id']}", flush=True)
+        for evaluation in evaluate_pending(pending, args):
+            evaluated[evaluation["instance_id"]] = evaluation
             save_jsonl(state_path, evaluated)
             print(json.dumps(evaluation, ensure_ascii=False), flush=True)
         if len(evaluated) < args.expected:
