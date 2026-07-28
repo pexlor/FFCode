@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run MyCode on SWE-bench Lite instances and emit prediction JSONL."""
+"""Run a coding agent on SWE-bench Lite instances and emit prediction JSONL."""
 
 import argparse
 import concurrent.futures
@@ -75,6 +75,51 @@ def save_state(path, state):
     tmp.replace(path)
 
 
+def build_agent_command(args, worktree):
+    if args.agent == "codex":
+        command = [
+            str(args.binary),
+            "exec",
+            "--json",
+            "--ephemeral",
+            "--sandbox",
+            "workspace-write",
+        ]
+        if args.model:
+            command.extend(["--model", args.model])
+        command.extend(["--cd", str(worktree), "-"])
+        return command
+    return [
+        str(args.binary),
+        "--cwd",
+        str(worktree),
+        "--output-format",
+        "jsonl",
+    ]
+
+
+def classify_agent_status(agent, timed_out, returncode, turn_status):
+    if timed_out:
+        return "timeout"
+    if agent == "codex":
+        return "completed" if returncode == 0 else "agent_error"
+    if returncode != 0 or not turn_status or turn_status == "failed":
+        return "agent_error"
+    return turn_status
+
+
+def write_predictions(path, tasks, state, model_name):
+    with path.open("w") as out:
+        for task in tasks:
+            item = state.get(task["instance_id"], {})
+            patch = Path(item.get("patch_path", ""))
+            out.write(json.dumps({
+                "instance_id": task["instance_id"],
+                "model_name_or_path": model_name,
+                "model_patch": patch.read_text(errors="replace") if patch.exists() else "",
+            }, ensure_ascii=False) + "\n")
+
+
 def run_instance(task, args):
     instance_id = task["instance_id"]
     worktree = args.root / "worktrees" / instance_id
@@ -141,21 +186,24 @@ def run_instance(task, args):
             run_cmd(["git", "config", "user.name", "SWE-bench"], cwd=worktree)
             run_cmd(["git", "add", "-A"], cwd=worktree, timeout=300)
             run_cmd(["git", "commit", "-q", "-m", "base"], cwd=worktree, timeout=300)
-        agent_dir = worktree / ".agent"
-        agent_dir.mkdir()
-        (agent_dir / "permission.yaml").write_text(
-            "disabled: true\ndefault: allow\nworkspace:\n  root: .\n")
+        if args.agent == "ffcode":
+            agent_dir = worktree / ".agent"
+            agent_dir.mkdir()
+            (agent_dir / "permission.yaml").write_text(
+                "disabled: true\ndefault: allow\nworkspace:\n  root: .\n")
         prompt = PROMPT + " ".join(task["problem_statement"].split())
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["PIP_NO_INDEX"] = "1"
         env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
-        process = subprocess.Popen([args.binary, "--cwd", str(worktree), "--output-format", "jsonl"], cwd=worktree,
+        process = subprocess.Popen(build_agent_command(args, worktree), cwd=worktree,
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, env=env)
         log = log_path.open("wb")
         process.stdin.write((prompt + "\n").encode())
         process.stdin.flush()
+        if args.agent == "codex":
+            process.stdin.close()
         deadline = time.time() + args.timeout
         output = bytearray()
         marker_buffer = ""
@@ -191,14 +239,16 @@ def run_instance(task, args):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
-        if timed_out:
-            result["status"] = "timeout"
-        elif process.returncode != 0 or not turn_status:
-            result["status"] = "agent_error"
-        elif turn_status == "failed":
-            result["status"] = "agent_error"
-        else:
-            result["status"] = turn_status
+        remainder = process.stdout.read()
+        if remainder:
+            log.write(remainder)
+            output.extend(remainder)
+        result["status"] = classify_agent_status(
+            args.agent,
+            timed_out,
+            process.returncode,
+            turn_status,
+        )
         if stop_reason:
             result["stop_reason"] = stop_reason
         log.close()
@@ -221,13 +271,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", type=Path, required=True)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--agent", choices=("ffcode", "codex"), default="ffcode")
     parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--model")
+    parser.add_argument("--model-name")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=1200)
     args = parser.parse_args()
     # The agent process runs with each task worktree as its cwd, so a relative
     # binary path would otherwise be resolved against the wrong directory.
     args.binary = args.binary.resolve()
+    if not args.model_name:
+        if args.agent == "codex":
+            args.model_name = f"Codex-{args.model or 'default'}"
+        else:
+            args.model_name = "MyCode-MiniMax-M3"
     args.root.mkdir(parents=True, exist_ok=True)
     for name in ("archives", "worktrees", "agent-logs", "patches"):
         (args.root / name).mkdir(exist_ok=True)
@@ -246,14 +304,7 @@ def main():
             save_state(state_path, state)
             print(json.dumps(result, ensure_ascii=False), flush=True)
     predictions = args.root / "predictions.jsonl"
-    with predictions.open("w") as out:
-        for task in tasks:
-            item = state.get(task["instance_id"], {})
-            patch = Path(item.get("patch_path", ""))
-            out.write(json.dumps({"instance_id": task["instance_id"],
-                                  "model_name_or_path": "MyCode-MiniMax-M3",
-                                  "model_patch": patch.read_text(errors="replace") if patch.exists() else ""},
-                                 ensure_ascii=False) + "\n")
+    write_predictions(predictions, tasks, state, args.model_name)
     print(f"predictions={predictions}", flush=True)
 
 
