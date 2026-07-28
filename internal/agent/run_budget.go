@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"MyCode/internal/llm"
@@ -63,11 +64,16 @@ func (e *budgetExceededError) Error() string {
 }
 
 type runBudgetState struct {
+	mu              sync.Mutex
 	budget          RunBudget
 	usage           llm.UsageInfo
 	toolCalls       int
 	providerRetries int
 	startedAt       time.Time
+	reservedInput   int64
+	reservedOutput  int64
+	reservedTools   int
+	subagentCalls   int
 }
 
 func newRunBudgetState(budget RunBudget) (*runBudgetState, error) {
@@ -78,6 +84,12 @@ func newRunBudgetState(budget RunBudget) (*runBudgetState, error) {
 }
 
 func (s *runBudgetState) recordUsage(usage llm.UsageInfo) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordUsageLocked(usage)
+}
+
+func (s *runBudgetState) recordUsageLocked(usage llm.UsageInfo) error {
 	s.usage = addUsage(s.usage, usage)
 	if limit := s.budget.MaxInputTokens; limit > 0 && s.usage.InputTokens > limit {
 		return &budgetExceededError{resource: budgetInputTokens, limit: limit, used: s.usage.InputTokens}
@@ -89,6 +101,12 @@ func (s *runBudgetState) recordUsage(usage llm.UsageInfo) error {
 }
 
 func (s *runBudgetState) reserveToolCalls(count int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reserveToolCallsLocked(count)
+}
+
+func (s *runBudgetState) reserveToolCallsLocked(count int) error {
 	used := s.toolCalls + count
 	if limit := s.budget.MaxToolCalls; limit > 0 && used > limit {
 		return &budgetExceededError{resource: budgetToolCalls, limit: int64(limit), used: int64(used)}
@@ -98,6 +116,8 @@ func (s *runBudgetState) reserveToolCalls(count int) error {
 }
 
 func (s *runBudgetState) reserveProviderRetry() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	used := s.providerRetries + 1
 	if limit := s.budget.MaxProviderRetries; limit > 0 && used > limit {
 		return &budgetExceededError{resource: budgetProviderRetries, limit: int64(limit), used: int64(used)}
@@ -121,6 +141,8 @@ type runBudgetSnapshot struct {
 }
 
 func (s *runBudgetState) snapshot(now time.Time) runBudgetSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return runBudgetSnapshot{Budget: s.budget, Usage: s.usage, ToolCalls: s.toolCalls, Elapsed: now.Sub(s.startedAt)}
 }
 

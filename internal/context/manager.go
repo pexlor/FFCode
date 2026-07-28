@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"MyCode/internal/conversation"
+	"MyCode/internal/hook"
 	"MyCode/internal/tool"
 )
 
@@ -52,6 +53,7 @@ type ContextManagerConfig struct {
 	Workspace string
 	Primary   Summarizer
 	Fallback  Summarizer
+	Hooks     *hook.Dispatcher
 }
 
 // ContextManager 编排四级触发式上下文管理。
@@ -100,9 +102,21 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 	manager.evictor = StaleResultEvictor{Estimator: config.Estimator, Model: config.Model.ModelName, Limit: budget.ToolHistoryLimit}
 	manager.compactor = ConversationCompactor{
 		Store: config.Store, Primary: config.Primary, Fallback: config.Fallback,
-		Estimator: config.Estimator, Model: config.Model.ModelName, Policy: config.Policy,
+		Estimator: config.Estimator, Model: config.Model.ModelName, Policy: config.Policy, Hooks: config.Hooks,
 	}
 	return manager, nil
+}
+
+// SetHookDispatcher updates the compaction lifecycle dispatcher.
+func (m *ContextManager) SetHookDispatcher(dispatcher *hook.Dispatcher) {
+	if m == nil {
+		return
+	}
+	m.compactor.Hooks = dispatcher
+}
+
+func (m *ContextManager) SetHookManager(dispatcher *hook.Dispatcher) {
+	m.SetHookDispatcher(dispatcher)
 }
 
 // Build 生成下一次模型调用使用的 ContextView。

@@ -30,6 +30,19 @@ type Session struct {
 
 	memoryProvider MemoryProvider
 	useMemory      bool
+	lifecycleKey   string
+}
+
+// LifecycleKey identifies one in-memory New or Resume transition. Sessions
+// constructed outside Service retain the legacy session-ID deduplication.
+func (s *Session) LifecycleKey() string {
+	if s == nil {
+		return ""
+	}
+	if s.lifecycleKey != "" {
+		return s.lifecycleKey
+	}
+	return s.ID
 }
 
 type TurnStatus string

@@ -2,10 +2,12 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"MyCode/internal/hook"
 	"MyCode/internal/permission"
 )
 
@@ -141,6 +143,183 @@ func TestExecuteBatchSerializesWritesBetweenReadStages(t *testing.T) {
 		if results[index].Output != output {
 			t.Fatalf("result %d = %+v, want output %q", index, results[index], output)
 		}
+	}
+}
+
+func TestExecuteBatchDrainsStartedInvocationAfterCancellation(t *testing.T) {
+	manager := NewToolsManager()
+	manager.SetPermissionManager(allowAllPermissions{})
+	dispatcher := hook.New(hook.Config{
+		FailurePolicy: hook.FailureOpen,
+		Policies:      map[hook.Event]hook.FailurePolicy{hook.EventPostToolUse: hook.FailureClosed},
+	})
+	manager.SetHookDispatcher(dispatcher)
+
+	started := make(chan struct{})
+	cancellationObserved := make(chan struct{})
+	releaseTool := make(chan struct{})
+	manager.RegisterTool(scheduledTool{name: "started-write", access: ToolAccessWrite, execute: func(ctx context.Context) ToolResult {
+		close(started)
+		<-ctx.Done()
+		close(cancellationObserved)
+		<-releaseTool
+		return ToolResult{Output: "started tool stopped after cancellation", IsError: true}
+	}})
+	laterStarted := make(chan struct{}, 1)
+	manager.RegisterTool(scheduledTool{name: "later-read", access: ToolAccessRead, execute: func(context.Context) ToolResult {
+		laterStarted <- struct{}{}
+		return ToolResult{Output: "later tool ran"}
+	}})
+
+	wantHookErr := errors.New("post hook audit failed")
+	postFinished := make(chan struct{})
+	if err := dispatcher.Register(hook.EventPostToolUse, func(input hook.Input) error {
+		if input.ToolName != "started-write" {
+			return nil
+		}
+		close(postFinished)
+		return wantHookErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan []ToolResult, 1)
+	go func() {
+		done <- manager.ExecuteBatch(ctx, []Invocation{
+			{ID: "started", Name: "started-write"},
+			{ID: "later", Name: "later-read"},
+		})
+	}()
+
+	waitForSignals(t, started, 1)
+	cancel()
+	waitForSignals(t, cancellationObserved, 1)
+
+	var results []ToolResult
+	returnedBeforeToolFinished := false
+	select {
+	case results = <-done:
+		returnedBeforeToolFinished = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseTool)
+	waitForSignals(t, postFinished, 1)
+	if results == nil {
+		select {
+		case results = <-done:
+		case <-time.After(time.Second):
+			t.Fatal("batch did not finish after the started tool and post hook completed")
+		}
+	}
+
+	if returnedBeforeToolFinished {
+		t.Errorf("ExecuteBatch returned before the started invocation's post hook completed: %+v", results)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %+v, want two entries", results)
+	}
+	if !errors.Is(results[0].HookError, wantHookErr) {
+		t.Errorf("started result hook error = %v, want %v", results[0].HookError, wantHookErr)
+	}
+	if results[0].Output == "tool execution canceled" {
+		t.Errorf("started result was replaced with a synthetic cancellation: %+v", results[0])
+	}
+	select {
+	case <-laterStarted:
+		t.Error("later execution stage started after cancellation")
+	default:
+	}
+}
+
+func TestExecuteBatchDrainsAllStartedReadsAfterCancellation(t *testing.T) {
+	manager := NewToolsManager()
+	manager.SetPermissionManager(allowAllPermissions{})
+	dispatcher := hook.New(hook.Config{
+		FailurePolicy: hook.FailureOpen,
+		Policies:      map[hook.Event]hook.FailurePolicy{hook.EventPostToolUse: hook.FailureClosed},
+	})
+	manager.SetHookDispatcher(dispatcher)
+
+	started := make(chan string, 2)
+	cancellationObserved := make(chan string, 2)
+	releaseReads := make(chan struct{})
+	for _, name := range []string{"read-a", "read-b"} {
+		manager.RegisterTool(scheduledTool{name: name, access: ToolAccessRead, execute: func(ctx context.Context) ToolResult {
+			started <- name
+			<-ctx.Done()
+			cancellationObserved <- name
+			<-releaseReads
+			return ToolResult{Output: name + " stopped after cancellation", IsError: true}
+		}})
+	}
+	laterStarted := make(chan struct{}, 1)
+	manager.RegisterTool(scheduledTool{name: "later-write", access: ToolAccessWrite, execute: func(context.Context) ToolResult {
+		laterStarted <- struct{}{}
+		return ToolResult{Output: "later tool ran"}
+	}})
+
+	wantHookErr := errors.New("read post hook audit failed")
+	postFinished := make(chan struct{}, 2)
+	if err := dispatcher.Register(hook.EventPostToolUse, func(input hook.Input) error {
+		if input.ToolName == "later-write" {
+			return nil
+		}
+		postFinished <- struct{}{}
+		return wantHookErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan []ToolResult, 1)
+	go func() {
+		done <- manager.ExecuteBatch(ctx, []Invocation{
+			{ID: "read-a", Name: "read-a"},
+			{ID: "read-b", Name: "read-b"},
+			{ID: "later", Name: "later-write"},
+		})
+	}()
+
+	waitForStarts(t, started, 2)
+	cancel()
+	waitForStarts(t, cancellationObserved, 2)
+
+	var results []ToolResult
+	returnedBeforeReadsFinished := false
+	select {
+	case results = <-done:
+		returnedBeforeReadsFinished = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseReads)
+	waitForSignals(t, postFinished, 2)
+	if results == nil {
+		select {
+		case results = <-done:
+		case <-time.After(time.Second):
+			t.Fatal("batch did not finish after all started reads and post hooks completed")
+		}
+	}
+
+	if returnedBeforeReadsFinished {
+		t.Errorf("ExecuteBatch returned before all started read post hooks completed: %+v", results)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results = %+v, want three entries", results)
+	}
+	for index := range 2 {
+		if !errors.Is(results[index].HookError, wantHookErr) {
+			t.Errorf("read result %d hook error = %v, want %v", index, results[index].HookError, wantHookErr)
+		}
+		if results[index].Output == "tool execution canceled" {
+			t.Errorf("read result %d was replaced with a synthetic cancellation: %+v", index, results[index])
+		}
+	}
+	select {
+	case <-laterStarted:
+		t.Error("later write stage started after cancellation")
+	default:
 	}
 }
 

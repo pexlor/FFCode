@@ -3,8 +3,9 @@ package tool
 import "context"
 
 type ToolResult struct {
-	Output  string
-	IsError bool
+	Output    string
+	IsError   bool
+	HookError error
 }
 
 type ToolSchema struct {

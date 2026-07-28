@@ -225,6 +225,9 @@ def main():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--timeout", type=int, default=1200)
     args = parser.parse_args()
+    # The agent process runs with each task worktree as its cwd, so a relative
+    # binary path would otherwise be resolved against the wrong directory.
+    args.binary = args.binary.resolve()
     args.root.mkdir(parents=True, exist_ok=True)
     for name in ("archives", "worktrees", "agent-logs", "patches"):
         (args.root / name).mkdir(exist_ok=True)

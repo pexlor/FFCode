@@ -2,14 +2,19 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"MyCode/internal/hook"
 )
 
 type serviceStore struct {
-	metadata SessionMetadata
-	messages []StoredMessage
+	metadata  SessionMetadata
+	messages  []StoredMessage
+	createErr error
 }
 
 type staticMemoryProvider struct {
@@ -23,6 +28,9 @@ func (p *staticMemoryProvider) Summary(context.Context) (string, error) {
 }
 
 func (s *serviceStore) CreateSession(_ context.Context, metadata SessionMetadata) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
 	s.metadata = metadata
 	return nil
 }
@@ -104,5 +112,135 @@ func TestResumeRestoresThinkingBlocks(t *testing.T) {
 	got := session.History[0].ThinkingBlocks
 	if len(got) != 1 || got[0].Thinking != "consider options" || got[0].Signature != "signed" {
 		t.Fatalf("thinking blocks = %#v", got)
+	}
+}
+
+func TestSessionStartHookRunsOncePerSession(t *testing.T) {
+	dispatcher := hook.New(hook.DefaultConfig())
+	var calls atomic.Int32
+	if err := dispatcher.Register(hook.EventSessionStart, func(_ context.Context, input hook.Input) (hook.Output, error) {
+		if input.SessionID == "" || input.Workspace != "/workspace" {
+			t.Fatalf("input = %+v", input)
+		}
+		calls.Add(1)
+		return hook.Output{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(&serviceStore{}, "/workspace", SessionContext{Hooks: dispatcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.dispatchSessionStart(context.Background(), service.Current(), "duplicate"); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("session_start calls = %d, want 1", got)
+	}
+}
+
+func TestUserPromptHookTransformsBeforePersistence(t *testing.T) {
+	store := &serviceStore{}
+	service, err := NewService(store, "/workspace", SessionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := hook.New(hook.DefaultConfig())
+	if err := dispatcher.Register(hook.EventUserPromptSubmit, func(_ context.Context, input hook.Input) (hook.Output, error) {
+		if input.UserPrompt != "original" {
+			t.Fatalf("input = %+v", input)
+		}
+		return hook.Output{UpdatedInput: map[string]any{"prompt": "rewritten"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetHookDispatcher(dispatcher)
+	if err := service.AddUserMessage(context.Background(), "original"); err != nil {
+		t.Fatal(err)
+	}
+	current := service.Current()
+	if len(current.History) != 1 || current.History[0].Content != "rewritten" || current.Title != "rewritten" {
+		t.Fatalf("current session = %+v", current)
+	}
+	if store.metadata.Title != "rewritten" {
+		t.Fatalf("stored metadata = %+v", store.metadata)
+	}
+}
+
+func TestRejectedUserPromptIsNotPersisted(t *testing.T) {
+	store := &serviceStore{}
+	service, err := NewService(store, "/workspace", SessionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := hook.New(hook.DefaultConfig())
+	if err := dispatcher.Register(hook.EventUserPromptSubmit, func(hook.Input) hook.Output {
+		return hook.Output{Decision: hook.DecisionDeny, Reason: "blocked"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetHookDispatcher(dispatcher)
+	err = service.AddUserMessage(context.Background(), "secret")
+	if !errors.Is(err, ErrUserPromptRejected) {
+		t.Fatalf("error = %v", err)
+	}
+	if service.Current().Persisted || len(service.Current().History) != 0 || store.metadata.ID != "" {
+		t.Fatalf("rejected prompt changed state: session=%+v metadata=%+v", service.Current(), store.metadata)
+	}
+}
+
+func TestRejectedPromptDoesNotPoisonNextSubmission(t *testing.T) {
+	store := &serviceStore{}
+	service, err := NewService(store, "/workspace", SessionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := hook.New(hook.DefaultConfig())
+	var calls atomic.Int32
+	if err := dispatcher.Register(hook.EventUserPromptSubmit, func(hook.Input) hook.Output {
+		if calls.Add(1) == 1 {
+			return hook.Output{Decision: hook.DecisionDeny, Reason: "first rejected"}
+		}
+		return hook.Output{}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetHookDispatcher(dispatcher)
+	if err := service.AddUserMessage(context.Background(), "first"); !errors.Is(err, ErrUserPromptRejected) {
+		t.Fatalf("first error = %v", err)
+	}
+	if err := service.AddUserMessage(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || service.Current().History[0].Content != "second" {
+		t.Fatalf("calls=%d history=%+v", calls.Load(), service.Current().History)
+	}
+}
+
+func TestPromptHookIsReevaluatedAfterSessionPersistenceFailure(t *testing.T) {
+	store := &serviceStore{createErr: errors.New("disk unavailable")}
+	service, err := NewService(store, "/workspace", SessionContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := hook.New(hook.DefaultConfig())
+	var calls atomic.Int32
+	if err := dispatcher.Register(hook.EventUserPromptSubmit, func(input hook.Input) hook.Output {
+		calls.Add(1)
+		return hook.Output{UpdatedInput: map[string]any{"prompt": "checked:" + input.Prompt}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetHookDispatcher(dispatcher)
+
+	if err := service.AddUserMessage(context.Background(), "first"); err == nil {
+		t.Fatal("first persistence unexpectedly succeeded")
+	}
+	store.createErr = nil
+	if err := service.AddUserMessage(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || service.Current().History[0].Content != "checked:second" {
+		t.Fatalf("calls=%d history=%+v", calls.Load(), service.Current().History)
 	}
 }

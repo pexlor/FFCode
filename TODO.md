@@ -29,7 +29,7 @@
 2. subagent
 3. agent team
 4. skill 系统 done
-5. hook 系统
+5. hook 系统 done
 
 # 长期任务
 1. 架构优化（人类架构）

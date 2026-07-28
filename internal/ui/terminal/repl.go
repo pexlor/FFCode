@@ -185,6 +185,16 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 			color = colorRed
 		}
 		fmt.Fprintf(renderer.statusOut, "%s%s%s %s%s%s\n", colorDim, toolLine("完成", ev.ToolName), colorReset, color, status, colorReset)
+	case agent.SubagentStartEvent:
+		renderer.finishThinking()
+		renderer.renderAssistantMarkdown()
+		renderer.showStatus(conversationStatus("子任务 " + ev.Task))
+	case agent.SubagentEvent:
+		// The child stream remains observable to protocol clients. The terminal
+		// intentionally renders only its compact lifecycle.
+	case agent.SubagentStopEvent:
+		renderer.clearStatus()
+		fmt.Fprintf(renderer.statusOut, "%ssubagent %s: %s%s\n", colorDim, ev.SubagentID, ev.Status, colorReset)
 	case agent.TurnEndEvent:
 		renderer.clearStatus()
 		renderer.finishThinking()

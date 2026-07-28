@@ -3,6 +3,7 @@ package agent
 import (
 	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
+	"MyCode/internal/hook"
 	"MyCode/internal/llm"
 	"MyCode/internal/skill"
 	"MyCode/internal/tool"
@@ -27,6 +28,7 @@ type Agent struct {
 	ProgressPolicy        ProgressPolicy
 	ProgressFingerprinter ProgressFingerprinter
 	CheckpointStore       CheckpointStore
+	Hooks                 *hook.Dispatcher
 }
 
 func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.ToolsManager) (*Agent, error) {
@@ -53,7 +55,28 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 
 func (a *Agent) SetContextManager(manager *contextmanager.ContextManager) {
 	a.contextManager = manager
+	if manager != nil && a.Hooks != nil {
+		manager.SetHookDispatcher(a.Hooks)
+	}
 }
+
+// SetHookDispatcher installs the shared lifecycle dispatcher in the agent and
+// its lower-level tool/context execution paths.
+func (a *Agent) SetHookDispatcher(dispatcher *hook.Dispatcher) {
+	if a == nil {
+		return
+	}
+	a.Hooks = dispatcher
+	if a.toolManager != nil {
+		a.toolManager.SetHookDispatcher(dispatcher)
+	}
+	if a.contextManager != nil {
+		a.contextManager.SetHookDispatcher(dispatcher)
+	}
+}
+
+func (a *Agent) SetHookManager(dispatcher *hook.Dispatcher) { a.SetHookDispatcher(dispatcher) }
+func (a *Agent) SetHooks(dispatcher *hook.Dispatcher)       { a.SetHookDispatcher(dispatcher) }
 
 // SetSkillManager enables metadata-only Skill catalog injection and active
 // Skill SOP/tool filtering for subsequent model requests.
@@ -101,12 +124,54 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 
 	go func() {
 		defer close(agentEventCh)
-		budgetState, err := newRunBudgetState(budget)
+		finished := false
+		checkpointAttempted := false
+		stopAttempted := false
+		runCompleted := false
+		lifecycleCtx := ctx
+		var budgetState *runBudgetState
+		var persistInterrupted func()
+		finish := func(event TurnEndEvent) {
+			if finished {
+				return
+			}
+			if !checkpointAttempted && !runCompleted && lifecycleCtx.Err() != nil && persistInterrupted != nil {
+				checkpointAttempted = true
+				persistInterrupted()
+			}
+			if !stopAttempted {
+				stopAttempted = true
+				event = a.dispatchStopHook(lifecycleCtx, session, event)
+			}
+			sendTurnEndEvent(agentEventCh, event)
+			finished = true
+		}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				usage := llm.UsageInfo{}
+				if budgetState != nil {
+					usage = budgetState.usage
+				}
+				finish(turnEndFromError(fmt.Errorf("agent run panic: %v", recovered), usage))
+				return
+			}
+			if !finished {
+				finish(turnEndFromError(errors.New("agent run exited without a terminal event"), llm.UsageInfo{}))
+			}
+		}()
+		var err error
+		budgetState, err = newRunBudgetState(budget)
 		if err != nil {
-			sendTurnEndEvent(agentEventCh, turnEndFromError(err, llm.UsageInfo{}))
+			finish(turnEndFromError(err, llm.UsageInfo{}))
 			return
 		}
 		ctx, cancel := budgetState.context(ctx)
+		ctx = withChildRuntime(ctx, budgetState)
+		eventContext := ctx
+		ctx = withAgentEventSink(ctx, func(event AgentEvent) bool {
+			return sendAgentEvent(eventContext, agentEventCh, event)
+		})
+		lifecycleCtx = ctx
 		defer cancel()
 		phaseController := newRunPhaseController()
 		progressTracker := newProgressTracker(a.ProgressPolicy)
@@ -116,22 +181,30 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 		}
 
 		if err := a.validate(session); err != nil {
-			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+			finish(turnEndFromError(err, budgetState.usage))
+			return
+		}
+		ctx = hook.WithInput(ctx, hook.Input{
+			SessionID:  session.ID,
+			Workspace:  session.Workspace,
+			UserPrompt: latestUserRequest(session.History),
+			Prompt:     latestUserRequest(session.History),
+		})
+		ctx, err = a.dispatchRunStartHooks(ctx, session)
+		if err != nil {
+			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
 		recoveryGuidance, err := a.recoverCheckpoint(ctx, session, fingerprinter)
 		if err != nil {
-			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
-		runCompleted := false
-		defer func() {
-			if !runCompleted && ctx.Err() != nil {
-				a.saveInterruptedCheckpoint(session, fingerprinter)
-			}
-		}()
+		persistInterrupted = func() {
+			a.saveInterruptedCheckpoint(session, fingerprinter)
+		}
 		if err := ctx.Err(); err != nil {
-			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
 		sendAgentEvent(ctx, agentEventCh, RunPhaseEvent{Phase: PhaseExplore, Reason: PhaseReasonRunStarted})
@@ -156,7 +229,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 					AvailableTools: toolSchemas,
 				})
 				if err != nil {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					finish(turnEndFromError(err, budgetState.usage))
 					return
 				}
 				// 从这里开始，LLM 只接触经过预算治理的视图，不再直接接触完整 History。
@@ -178,12 +251,12 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 
 				result, err := a.collectStream(ctx, events, errs)
 				if budgetErr := budgetState.recordUsage(result.usage); budgetErr != nil {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(budgetErr, budgetState.usage))
+					finish(turnEndFromError(budgetErr, budgetState.usage))
 					return
 				}
 				if err == nil {
 					if err := publishAttemptEvents(ctx, agentEventCh, result.events); err != nil {
-						sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+						finish(turnEndFromError(err, budgetState.usage))
 						return
 					}
 					assistantText = result.assistantText
@@ -194,18 +267,18 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				}
 				err = llm.NormalizeProviderError("model", err)
 				if !a.ProviderRetryPolicy.ShouldRetry(err, attempt) {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					finish(turnEndFromError(err, budgetState.usage))
 					return
 				}
 				if budgetErr := budgetState.reserveProviderRetry(); budgetErr != nil {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(budgetErr, budgetState.usage))
+					finish(turnEndFromError(budgetErr, budgetState.usage))
 					return
 				}
 				delay := a.ProviderRetryPolicy.Delay(attempt, err)
 				provider, errorType := providerErrorDetails(err)
 				sendAgentEvent(ctx, agentEventCh, ProviderRetryEvent{Attempt: attempt + 2, Delay: delay, Provider: provider, ErrorType: errorType})
 				if err := llm.WaitForRetry(ctx, delay); err != nil {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					finish(turnEndFromError(err, budgetState.usage))
 					return
 				}
 			}
@@ -220,20 +293,20 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				}
 				if a.contextManager != nil {
 					if err := a.contextManager.SyncSession(ctx, session); err != nil {
-						sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+						finish(turnEndFromError(err, budgetState.usage))
 						return
 					}
 				}
 				if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointCompleted, nil, nil, true); err != nil {
-					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					finish(turnEndFromError(err, budgetState.usage))
 					return
 				}
 				runCompleted = true
-				sendTurnEndEvent(agentEventCh, turnEndFromStopReason(stopReason, budgetState.usage))
+				finish(turnEndFromStopReason(stopReason, budgetState.usage))
 				return
 			}
 			if err := budgetState.reserveToolCalls(len(toolCalls)); err != nil {
-				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolCalls(toolCalls))
@@ -252,14 +325,15 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				ToolUses:       toToolUseBlocks(toolCalls),
 			})
 			if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointModel, toolCalls, nil, false); err != nil {
-				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
 
-			toolResults := a.executeToolsWithBlocked(ctx, toolCalls, blocked, agentEventCh)
+			toolResults, postHookErr := a.executeToolsWithBlocked(ctx, toolCalls, blocked, agentEventCh)
 			session.AddToolResult(toolResults)
-			if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointTools, nil, completedToolIDs(toolCalls), false); err != nil {
-				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+			checkpointErr := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointTools, nil, completedToolIDs(toolCalls), false)
+			if err := errors.Join(postHookErr, checkpointErr); err != nil {
+				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolResults(toolCalls, phaseToolResults(toolResults)))
@@ -279,11 +353,11 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 					emitPhaseTransition(ctx, agentEventCh, phaseController.transition(PhaseFinalize, PhaseReasonNoProgress))
 				case ProgressStop:
 					if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointCompleted, nil, completedToolIDs(toolCalls), true); err != nil {
-						sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+						finish(turnEndFromError(err, budgetState.usage))
 						return
 					}
 					runCompleted = true
-					sendTurnEndEvent(agentEventCh, TurnEndEvent{Status: TurnIncomplete, StopReason: StopNoProgress, ProviderReason: string(StopNoProgress), Usage: budgetState.usage})
+					finish(TurnEndEvent{Status: TurnIncomplete, StopReason: StopNoProgress, ProviderReason: string(StopNoProgress), Usage: budgetState.usage})
 					return
 				case ProgressNone, ProgressWarning, ProgressToolBlocked:
 				}
@@ -291,7 +365,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 		}
 
 		err = fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
-		sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+		finish(turnEndFromError(err, budgetState.usage))
 	}()
 
 	return agentEventCh
@@ -534,10 +608,11 @@ func (a *Agent) executeTool(ctx context.Context, call llm.ToolCallComplete) tool
 // executeTools delegates scheduling to ToolsManager and maps ordered results
 // back to the model's tool-use IDs.
 func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, events chan<- AgentEvent) []conversation.ToolResultBlock {
-	return a.executeToolsWithBlocked(ctx, calls, nil, events)
+	results, _ := a.executeToolsWithBlocked(ctx, calls, nil, events)
+	return results
 }
 
-func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCallComplete, blocked map[string]ProgressDecision, events chan<- AgentEvent) []conversation.ToolResultBlock {
+func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCallComplete, blocked map[string]ProgressDecision, events chan<- AgentEvent) ([]conversation.ToolResultBlock, error) {
 	invocations := make([]tool.Invocation, 0, len(calls))
 	invocationIndexes := make([]int, 0, len(calls))
 	for index, call := range calls {
@@ -575,6 +650,7 @@ func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCal
 		}
 	}
 	executed := a.toolManager.ExecuteBatch(ctx, invocations)
+	var postHookErrors []error
 	for resultIndex, outcome := range executed {
 		callIndex := invocationIndexes[resultIndex]
 		call := calls[callIndex]
@@ -589,8 +665,11 @@ func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCal
 			Content:   outcome.Output,
 			IsError:   outcome.IsError,
 		})
+		if outcome.HookError != nil {
+			postHookErrors = append(postHookErrors, fmt.Errorf("tool %s (%s) post hook: %w", call.ToolName, call.ToolID, outcome.HookError))
+		}
 	}
-	return results
+	return results, errors.Join(postHookErrors...)
 }
 
 func toToolUseBlocks(toolCalls []llm.ToolCallComplete) []conversation.ToolUseBlock {

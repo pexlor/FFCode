@@ -22,6 +22,8 @@ summary:
 context:
   window: 128000
   output_reserve: 8192
+hooks:
+  enabled: true
 memory:
   generate: false
   use: true
@@ -69,6 +71,9 @@ memory:
 	}
 	if got.Context.Window != 128000 || got.Context.OutputReserve != 8192 {
 		t.Fatalf("context config was overridden by environment: %+v", got.Context)
+	}
+	if !got.Hooks.Enabled {
+		t.Fatalf("hooks config mismatch: %+v", got.Hooks)
 	}
 	if got.Memory.Generate || !got.Memory.Use || got.Memory.Root != ".memory-test" || got.Memory.MinSessionIdle != "45m" || got.Memory.ExtractionConcurrency != 3 || got.Memory.SummaryTokenLimit != 2048 {
 		t.Fatalf("memory config mismatch: %+v", got.Memory)

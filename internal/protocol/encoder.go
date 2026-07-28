@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"MyCode/internal/agent"
+	"MyCode/internal/llm"
 )
 
 type Encoder struct {
@@ -24,6 +25,14 @@ func (e *Encoder) EncodeTurnStarted(sessionID, turnID string) error {
 }
 
 func (e *Encoder) EncodeAgentEvent(sessionID, turnID string, event agent.AgentEvent) error {
+	eventType, data, err := agentEventData(event)
+	if err != nil {
+		return err
+	}
+	return e.encode(eventType, sessionID, turnID, data)
+}
+
+func agentEventData(event agent.AgentEvent) (string, any, error) {
 	var eventType string
 	var data any
 	switch item := event.(type) {
@@ -49,6 +58,22 @@ func (e *Encoder) EncodeAgentEvent(sessionID, turnID string, event agent.AgentEv
 		eventType, data = "tool_execution_started", toolData{ToolUseID: item.ToolUseID, ToolName: item.ToolName}
 	case agent.ToolResultEvent:
 		eventType, data = "tool_result", toolData{ToolUseID: item.ToolUseID, ToolName: item.ToolName, Content: item.Content, IsError: item.IsError}
+	case agent.SubagentStartEvent:
+		eventType, data = "subagent_started", subagentStartData{
+			SubagentID: item.SubagentID, ParentSessionID: item.ParentSessionID, SessionID: item.SessionID, Task: item.Task,
+		}
+	case agent.SubagentEvent:
+		childType, childData, err := agentEventData(item.Event)
+		if err != nil {
+			return "", nil, err
+		}
+		eventType, data = "subagent_event", subagentEventData{SubagentID: item.SubagentID, EventType: childType, Data: childData}
+	case agent.SubagentStopEvent:
+		finished := subagentFinishedData{SubagentID: item.SubagentID, SessionID: item.SessionID, Status: item.Status, Usage: encodeUsage(item.Usage)}
+		if item.Err != nil {
+			finished.Error = &errorData{Message: item.Err.Error()}
+		}
+		eventType, data = "subagent_finished", finished
 	case agent.TurnEndEvent:
 		terminal := turnFinishedData{
 			Status:         string(item.Status),
@@ -67,9 +92,16 @@ func (e *Encoder) EncodeAgentEvent(sessionID, turnID string, event agent.AgentEv
 		}
 		eventType, data = "turn_finished", terminal
 	default:
-		return fmt.Errorf("unsupported agent event %T", event)
+		return "", nil, fmt.Errorf("unsupported agent event %T", event)
 	}
-	return e.encode(eventType, sessionID, turnID, data)
+	return eventType, data, nil
+}
+
+func encodeUsage(usage llm.UsageInfo) usageData {
+	return usageData{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
+		CacheReadTokens: usage.CacheReadTokens, CacheCreationTokens: usage.CacheCreationTokens,
+	}
 }
 
 func (e *Encoder) encode(eventType, sessionID, turnID string, data any) error {

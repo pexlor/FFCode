@@ -15,6 +15,12 @@ type Config struct {
 	Summary SummaryConfig `yaml:"summary"`
 	Context ContextConfig `yaml:"context"`
 	Memory  MemoryConfig  `yaml:"memory"`
+	Hooks   HooksConfig   `yaml:"hooks"`
+}
+
+type HooksConfig struct {
+	// Enabled opts into executing trusted code discovered in the workspace.
+	Enabled bool `yaml:"enabled"`
 }
 
 type ModelConfig struct {

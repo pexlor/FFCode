@@ -30,6 +30,9 @@ func TestEncoderMapsAgentEventsToVersionOneProtocol(t *testing.T) {
 		{name: "tool call completed", event: agent.ToolCallCompleteEvent{ToolUseID: "tool-1", ToolName: "read_file", Arguments: map[string]any{"path": "README.md"}}, eventType: "tool_call_completed", assert: assertString("tool_name", "read_file")},
 		{name: "tool execution started", event: agent.ToolExecutionStartEvent{ToolUseID: "tool-1", ToolName: "read_file"}, eventType: "tool_execution_started", assert: assertString("tool_name", "read_file")},
 		{name: "tool result", event: agent.ToolResultEvent{ToolUseID: "tool-1", ToolName: "read_file", Content: "contents", IsError: false}, eventType: "tool_result", assert: assertString("content", "contents")},
+		{name: "subagent started", event: agent.SubagentStartEvent{SubagentID: "child-1", ParentSessionID: "session-1", SessionID: "child-session", Task: "inspect"}, eventType: "subagent_started", assert: assertString("subagent_id", "child-1")},
+		{name: "subagent event", event: agent.SubagentEvent{SubagentID: "child-1", Event: agent.TextEvent{Text: "finding"}}, eventType: "subagent_event", assert: assertString("event_type", "text_delta")},
+		{name: "subagent finished", event: agent.SubagentStopEvent{SubagentID: "child-1", SessionID: "child-session", Status: "completed"}, eventType: "subagent_finished", assert: assertString("status", "completed")},
 		{name: "turn finished", event: agent.TurnEndEvent{Status: agent.TurnCompleted, StopReason: agent.StopEndTurn, ProviderReason: "stop", Usage: llm.UsageInfo{InputTokens: 10, OutputTokens: 3, TotalTokens: 13}}, eventType: "turn_finished", assert: assertString("status", "completed")},
 	}
 

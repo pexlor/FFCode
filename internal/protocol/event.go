@@ -63,3 +63,24 @@ type turnFinishedData struct {
 	Usage          usageData  `json:"usage"`
 	Error          *errorData `json:"error,omitempty"`
 }
+
+type subagentStartData struct {
+	SubagentID      string `json:"subagent_id"`
+	ParentSessionID string `json:"parent_session_id"`
+	SessionID       string `json:"session_id"`
+	Task            string `json:"task"`
+}
+
+type subagentEventData struct {
+	SubagentID string `json:"subagent_id"`
+	EventType  string `json:"event_type"`
+	Data       any    `json:"data"`
+}
+
+type subagentFinishedData struct {
+	SubagentID string     `json:"subagent_id"`
+	SessionID  string     `json:"session_id"`
+	Status     string     `json:"status"`
+	Usage      usageData  `json:"usage"`
+	Error      *errorData `json:"error,omitempty"`
+}

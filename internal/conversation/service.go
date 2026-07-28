@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"MyCode/internal/hook"
 )
 
 const (
@@ -18,10 +21,13 @@ const (
 )
 
 var (
-	ErrSessionNotFound      = errors.New("session not found")
-	ErrAmbiguousSessionID   = errors.New("ambiguous session id")
-	ErrCurrentSessionDelete = errors.New("cannot delete current session")
-	ErrInvalidSessionTitle  = errors.New("invalid session title")
+	ErrSessionNotFound       = errors.New("session not found")
+	ErrAmbiguousSessionID    = errors.New("ambiguous session id")
+	ErrCurrentSessionDelete  = errors.New("cannot delete current session")
+	ErrInvalidSessionTitle   = errors.New("invalid session title")
+	ErrUserPromptRejected    = errors.New("user prompt rejected by hook")
+	ErrSessionStartRejected  = errors.New("session start rejected by hook")
+	sessionLifecycleSequence atomic.Uint64
 )
 
 type Store interface {
@@ -37,6 +43,7 @@ type SessionContext struct {
 	SystemPrompt string
 	Memory       MemoryProvider
 	UseMemory    bool
+	Hooks        *hook.Dispatcher
 }
 
 type Service struct {
@@ -57,7 +64,7 @@ func NewService(store Store, workspace string, sessionContext SessionContext) (*
 	return s, nil
 }
 
-func (s *Service) New(_ context.Context, title string) (*Session, error) {
+func (s *Service) New(ctx context.Context, title string) (*Session, error) {
 	title, explicit, err := normalizeOptionalTitle(title)
 	if err != nil {
 		return nil, err
@@ -67,21 +74,40 @@ func (s *Service) New(_ context.Context, title string) (*Session, error) {
 		return nil, err
 	}
 	now := time.Now()
-	s.current = &Session{
+	next := &Session{
 		ID: id, Title: title, Workspace: s.workspace, CreatedAt: now, UpdatedAt: now,
 		ExplicitTitle: explicit, SystemPrompt: s.context.SystemPrompt,
 		memoryProvider: s.context.Memory, useMemory: s.context.UseMemory,
+		lifecycleKey: newSessionLifecycleKey(id),
 	}
-	return s.current, nil
+	if err := s.dispatchSessionStart(ctx, next, "new"); err != nil {
+		return nil, err
+	}
+	s.current = next
+	return next, nil
 }
 
 func (s *Service) Current() *Session {
 	return s.current
 }
 
+// SetHookDispatcher replaces the shared lifecycle dispatcher used by future
+// session transitions and prompt submissions.
+func (s *Service) SetHookDispatcher(dispatcher *hook.Dispatcher) {
+	s.context.Hooks = dispatcher
+}
+
 func (s *Service) AddUserMessage(ctx context.Context, content string) error {
 	if s.current == nil {
 		return errors.New("current session is not initialized")
+	}
+	promptHookKey := ""
+	if s.context.Hooks != nil {
+		promptHookKey = promptHookKeyForSession(s.current)
+	}
+	content, err := s.dispatchUserPrompt(ctx, content)
+	if err != nil {
+		return err
 	}
 	if !s.current.Persisted {
 		if !s.current.ExplicitTitle {
@@ -89,6 +115,9 @@ func (s *Service) AddUserMessage(ctx context.Context, content string) error {
 		}
 		metadata := SessionMetadata{ID: s.current.ID, Title: s.current.Title, Workspace: s.workspace, CreatedAt: s.current.CreatedAt, UpdatedAt: time.Now()}
 		if err := s.store.CreateSession(ctx, metadata); err != nil {
+			if promptHookKey != "" {
+				s.context.Hooks.ResetOnce(hook.EventUserPromptSubmit, promptHookKey)
+			}
 			return fmt.Errorf("create session %s: %w", s.current.ID, err)
 		}
 		s.current.Persisted = true
@@ -127,14 +156,114 @@ func (s *Service) Resume(ctx context.Context, idOrPrefix string) (*Session, erro
 	if len(stored) > len(recovered) || len(history) > 0 {
 		history = append(history, Message{Role: USER, Content: fmt.Sprintf("[context boundary: resumed session last activity %s; read current files for exact state]", metadata.UpdatedAt.Local().Format(time.RFC3339))})
 	}
-	s.current = &Session{
+	next := &Session{
 		ID: metadata.ID, Title: metadata.Title, Workspace: metadata.Workspace,
 		CreatedAt: metadata.CreatedAt, UpdatedAt: metadata.UpdatedAt, Persisted: true,
 		ExplicitTitle: metadata.Title != "" && metadata.Title != DefaultTitle,
 		SystemPrompt:  s.context.SystemPrompt, History: history,
 		memoryProvider: s.context.Memory, useMemory: s.context.UseMemory,
+		lifecycleKey: newSessionLifecycleKey(metadata.ID),
 	}
-	return s.current, nil
+	if err := s.dispatchSessionStart(ctx, next, "resume"); err != nil {
+		return nil, err
+	}
+	s.current = next
+	return next, nil
+}
+
+func (s *Service) dispatchSessionStart(ctx context.Context, session *Session, reason string) error {
+	if s == nil || s.context.Hooks == nil || session == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lifecycleKey := session.LifecycleKey()
+	result, err := s.context.Hooks.DispatchOnce(ctx, hook.EventSessionStart, lifecycleKey, hook.Input{
+		SessionID: session.ID,
+		Workspace: session.Workspace,
+		Reason:    reason,
+		Metadata: map[string]any{
+			"title":     session.Title,
+			"persisted": session.Persisted,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("session_start hook: %w", err)
+	}
+	if result.Blocked {
+		s.context.Hooks.ResetOnce(hook.EventSessionStart, lifecycleKey)
+		return fmt.Errorf("%w: %s", ErrSessionStartRejected, hookReason(result.Reason))
+	}
+	return nil
+}
+
+func newSessionLifecycleKey(sessionID string) string {
+	return fmt.Sprintf("%s:%d", sessionID, sessionLifecycleSequence.Add(1))
+}
+
+func (s *Service) dispatchUserPrompt(ctx context.Context, content string) (string, error) {
+	if s == nil || s.context.Hooks == nil || s.current == nil {
+		return content, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	input := hook.Input{
+		SessionID:  s.current.ID,
+		Workspace:  s.current.Workspace,
+		UserPrompt: content,
+		Prompt:     content,
+	}
+	key := promptHookKey(s.current.ID, nextUserPromptOrdinal(s.current.History))
+	result, err := s.context.Hooks.DispatchOnce(
+		hook.WithInput(ctx, input),
+		hook.EventUserPromptSubmit,
+		key,
+		input,
+	)
+	if err != nil {
+		return "", fmt.Errorf("user_prompt_submit hook: %w", err)
+	}
+	if result.Blocked {
+		s.context.Hooks.ResetOnce(hook.EventUserPromptSubmit, key)
+		return "", fmt.Errorf("%w: %s", ErrUserPromptRejected, hookReason(result.Reason))
+	}
+	for _, key := range []string{"user_prompt", "prompt"} {
+		if updated, ok := result.UpdatedInput[key].(string); ok {
+			return updated, nil
+		}
+	}
+	return content, nil
+}
+
+func nextUserPromptOrdinal(history []Message) int {
+	ordinal := 1
+	for _, message := range history {
+		if message.Role == USER {
+			ordinal++
+		}
+	}
+	return ordinal
+}
+
+func promptHookKey(sessionID string, ordinal int) string {
+	return fmt.Sprintf("%s:%d", sessionID, ordinal)
+}
+
+func promptHookKeyForSession(session *Session) string {
+	if session == nil {
+		return ""
+	}
+	return promptHookKey(session.ID, nextUserPromptOrdinal(session.History))
+}
+
+func hookReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "hook denied operation"
+	}
+	return reason
 }
 
 func (s *Service) Delete(ctx context.Context, idOrPrefix string) error {

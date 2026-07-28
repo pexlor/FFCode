@@ -94,6 +94,26 @@ type ToolResultEvent struct {
 	IsError   bool
 }
 
+type SubagentStartEvent struct {
+	SubagentID      string
+	ParentSessionID string
+	SessionID       string
+	Task            string
+}
+
+type SubagentEvent struct {
+	SubagentID string
+	Event      AgentEvent
+}
+
+type SubagentStopEvent struct {
+	SubagentID string
+	SessionID  string
+	Status     string
+	Usage      llm.UsageInfo
+	Err        error
+}
+
 type TurnEndEvent struct {
 	Status         TurnStatus
 	StopReason     StopReason
@@ -124,6 +144,9 @@ func (ToolCallDeltaEvent) agentEvent()      {}
 func (ToolCallCompleteEvent) agentEvent()   {}
 func (ToolExecutionStartEvent) agentEvent() {}
 func (ToolResultEvent) agentEvent()         {}
+func (SubagentStartEvent) agentEvent()      {}
+func (SubagentEvent) agentEvent()           {}
+func (SubagentStopEvent) agentEvent()       {}
 func (TurnEndEvent) agentEvent()            {}
 func (DoneEvent) agentEvent()               {}
 func (ErrorEvent) agentEvent()              {}

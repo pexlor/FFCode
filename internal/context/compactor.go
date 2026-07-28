@@ -5,7 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"MyCode/internal/hook"
 )
+
+var ErrCompactHookRejected = errors.New("context compaction rejected by hook")
 
 type SummarizeRequest struct {
 	// PreviousSummary 是上一版已经生效的任务状态，而不是全部原始历史。
@@ -34,6 +38,7 @@ type ConversationCompactor struct {
 	Estimator TokenEstimator
 	Model     string
 	Policy    ContextPolicy
+	Hooks     *hook.Dispatcher
 }
 
 // Compact 尝试把较早的完整 Turn 合并进新摘要。
@@ -66,6 +71,25 @@ func (c ConversationCompactor) Compact(
 		Messages:                        eligible,
 		TokenBudget:                     tokenBudget,
 	}
+	baseInput, _ := hook.InputFromContext(ctx)
+	baseInput.Event = hook.EventPreCompact
+	baseInput.SessionID = sessionID
+	baseInput.Metadata = mergeHookMetadata(baseInput.Metadata, map[string]any{
+		"previous_summary_version":            active.Version,
+		"previous_covered_through_message_id": active.CoveredThroughMessageID,
+		"eligible_message_count":              len(eligible),
+		"increment_tokens":                    increment,
+		"token_budget":                        tokenBudget,
+	})
+	if c.Hooks != nil {
+		result, hookErr := c.Hooks.Dispatch(hook.WithInput(ctx, baseInput), hook.EventPreCompact, baseInput)
+		if hookErr != nil {
+			return active, false, fmt.Errorf("pre_compact hook: %w", hookErr)
+		}
+		if result.Blocked {
+			return active, false, fmt.Errorf("%w: %s", ErrCompactHookRejected, compactHookReason(result.Reason))
+		}
+	}
 	// 独立摘要模型失败时只回退当前模型一次；两者都失败则使用确定性最小摘要。
 	content, err := c.callSummarizers(ctx, request)
 	if err != nil {
@@ -92,7 +116,45 @@ func (c ConversationCompactor) Compact(
 	if err := c.Store.CommitSummary(ctx, snapshot, active.Version); err != nil {
 		return active, false, err
 	}
+	if c.Hooks != nil {
+		postInput := baseInput
+		postInput.Event = hook.EventPostCompact
+		postInput.Metadata = mergeHookMetadata(postInput.Metadata, map[string]any{
+			"changed":                    true,
+			"summary_version":            snapshot.Version,
+			"covered_through_message_id": snapshot.CoveredThroughMessageID,
+			"covered_through_turn_id":    snapshot.CoveredThroughTurnID,
+			"summary_tokens":             snapshot.TokenEstimate,
+		})
+		postContext := hook.WithInput(context.WithoutCancel(ctx), postInput)
+		result, hookErr := c.Hooks.Dispatch(postContext, hook.EventPostCompact, postInput)
+		if hookErr != nil {
+			return snapshot, true, fmt.Errorf("post_compact hook: %w", hookErr)
+		}
+		if result.Blocked {
+			return snapshot, true, fmt.Errorf("post_compact hook: %w: %s", ErrCompactHookRejected, compactHookReason(result.Reason))
+		}
+	}
 	return snapshot, true, nil
+}
+
+func mergeHookMetadata(current, additional map[string]any) map[string]any {
+	result := make(map[string]any, len(current)+len(additional))
+	for key, value := range current {
+		result[key] = value
+	}
+	for key, value := range additional {
+		result[key] = value
+	}
+	return result
+}
+
+func compactHookReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "hook denied operation"
+	}
+	return reason
 }
 
 // fitTextToTokenBudget 用 Rune 边界截断确定性摘要，避免切坏 UTF-8 中文字符。

@@ -57,6 +57,26 @@ func TestTurnEndEventReturnsTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestSubagentEventsRenderCompactLifecycleOnly(t *testing.T) {
+	var status bytes.Buffer
+	renderer := newAgentEventRenderer(&status, &bytes.Buffer{})
+	if err := renderer.render(agent.SubagentStartEvent{SubagentID: "child-1", Task: "inspect permissions"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderer.render(agent.SubagentEvent{SubagentID: "child-1", Event: agent.TurnEndEvent{
+		Status: agent.TurnFailed, StopReason: agent.StopAgentError, Err: errors.New("child failed"),
+	}}); err != nil {
+		t.Fatalf("wrapped child failure must not fail the parent renderer: %v", err)
+	}
+	if err := renderer.render(agent.SubagentStopEvent{SubagentID: "child-1", Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	plain := ansiSequence.ReplaceAllString(status.String(), "")
+	if !strings.Contains(plain, "inspect permissions") || !strings.Contains(plain, "completed") {
+		t.Fatalf("status = %q", plain)
+	}
+}
+
 func TestConsumeAgentEventsDrainsStreamAfterInterrupt(t *testing.T) {
 	events := make(chan agent.AgentEvent, 64)
 	interrupts := make(chan os.Signal, 1)

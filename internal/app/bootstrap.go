@@ -5,12 +5,15 @@ import (
 	appconfig "MyCode/internal/config"
 	contextmanager "MyCode/internal/context"
 	session "MyCode/internal/conversation"
+	"MyCode/internal/hook"
 	"MyCode/internal/llm"
 	"MyCode/internal/memory"
 	"MyCode/internal/skill"
 	"MyCode/internal/storage/filecheckpoint"
 	"MyCode/internal/storage/fileconversation"
 	filememory "MyCode/internal/storage/filememory"
+	"MyCode/internal/subagent"
+	"MyCode/internal/tool"
 	"context"
 	"os"
 	"path/filepath"
@@ -26,6 +29,10 @@ type runtime struct {
 }
 
 func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPrompt string) (*runtime, error) {
+	hookDispatcher, err := loadHooks(config, workspace)
+	if err != nil {
+		return nil, err
+	}
 	client, err := llm.NewClient(modelParameters(config.Model))
 	if err != nil {
 		return nil, err
@@ -39,11 +46,15 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 		cleanup()
 		return nil, err
 	}
+	if err := registerSubagentTool(tools, client, hookDispatcher); err != nil {
+		return fail(err)
+	}
 
 	runner, err := agent.NewAgent(ctx, client, tools)
 	if err != nil {
 		return fail(err)
 	}
+	runner.SetHookDispatcher(hookDispatcher)
 	checkpointStore, err := filecheckpoint.New(filepath.Join(workspace, ".context", "checkpoints"))
 	if err != nil {
 		return fail(err)
@@ -127,6 +138,7 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 		Workspace: workspace,
 		Primary:   primary,
 		Fallback:  contextmanager.LLMSummarizer{Client: client},
+		Hooks:     hookDispatcher,
 	})
 	if err != nil {
 		return fail(err)
@@ -136,12 +148,29 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 		SystemPrompt: systemPrompt,
 		Memory:       memoryStore,
 		UseMemory:    config.Memory.Use,
+		Hooks:        hookDispatcher,
 	})
 	if err != nil {
 		memoryCancel()
 		return fail(err)
 	}
 	return &runtime{runner: runner, contextManager: contextManager, sessions: sessions, cleanup: func() { memoryCancel(); cleanup() }}, nil
+}
+
+func registerSubagentTool(tools *tool.ToolsManager, client llm.LLMClient, hooks *hook.Dispatcher) error {
+	manager, err := subagent.NewManager(client, hooks, subagent.Config{})
+	if err != nil {
+		return err
+	}
+	tools.RegisterTool(subagent.NewDelegateTool(manager))
+	return nil
+}
+
+func loadHooks(config appconfig.Config, workspace string) (*hook.Dispatcher, error) {
+	if !config.Hooks.Enabled && strings.TrimSpace(os.Getenv("MYCODE_HOOK_CONFIG")) == "" {
+		return hook.New(hook.DefaultConfig()), nil
+	}
+	return hook.LoadWorkspace(workspace)
 }
 
 func defaultSkillSources(workspace string) []skill.Source {

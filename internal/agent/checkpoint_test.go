@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"MyCode/internal/conversation"
+	"MyCode/internal/hook"
 	"MyCode/internal/llm"
 	"MyCode/internal/tool"
 )
@@ -77,6 +78,66 @@ func TestAgentSavesInterruptedCheckpointAfterDeadline(t *testing.T) {
 	}
 	if len(checkpoint.History) != len(session.History) {
 		t.Fatalf("checkpoint history = %+v, session history = %+v", checkpoint.History, session.History)
+	}
+}
+
+type panickingCheckpointStore struct{}
+
+func (panickingCheckpointStore) Load(context.Context, string) (RunCheckpoint, error) {
+	return RunCheckpoint{}, ErrCheckpointNotFound
+}
+
+func (panickingCheckpointStore) Save(context.Context, RunCheckpoint) error {
+	panic("checkpoint save panic")
+}
+
+func TestCheckpointPanicStillEmitsStopAndTerminalEvent(t *testing.T) {
+	dispatcher := hook.New(hook.DefaultConfig())
+	var stopCalls atomic.Int32
+	if err := dispatcher.Register(hook.EventStop, func(hook.Input) {
+		stopCalls.Add(1)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewAgent(context.Background(), budgetClient{block: true}, tool.NewToolsManager())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.SetHookDispatcher(dispatcher)
+	runner.CheckpointStore = panickingCheckpointStore{}
+
+	terminal := terminalEvent(runner.RunContextWithBudget(context.Background(), testSession(), RunBudget{MaxDuration: 20 * time.Millisecond}))
+	if terminal.Err == nil || !strings.Contains(terminal.Err.Error(), "checkpoint save panic") {
+		t.Fatalf("terminal = %+v", terminal)
+	}
+	if stopCalls.Load() != 1 {
+		t.Fatalf("stop calls = %d, want 1", stopCalls.Load())
+	}
+}
+
+func TestAgentSavesInterruptedCheckpointBeforeStopHook(t *testing.T) {
+	store := &memoryCheckpointStore{}
+	dispatcher := hook.New(hook.DefaultConfig())
+	var boundarySeenByStop CheckpointBoundary
+	if err := dispatcher.Register(hook.EventStop, func(hook.Input) {
+		boundarySeenByStop = store.latest().Boundary
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := NewAgent(context.Background(), budgetClient{block: true}, tool.NewToolsManager())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.CheckpointStore = store
+	runner.SetHookDispatcher(dispatcher)
+
+	terminal := terminalEvent(runner.RunContextWithBudget(context.Background(), testSession(), RunBudget{MaxDuration: 20 * time.Millisecond}))
+
+	if terminal.StopReason != StopDeadlineExceeded {
+		t.Fatalf("terminal = %+v", terminal)
+	}
+	if boundarySeenByStop != CheckpointInterrupted {
+		t.Fatalf("checkpoint boundary seen by stop = %q, want %q", boundarySeenByStop, CheckpointInterrupted)
 	}
 }
 
