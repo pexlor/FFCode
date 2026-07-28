@@ -18,7 +18,7 @@ type GlobTool struct{}
 func (t *GlobTool) Name() string        { return "Glob" }
 func (t *GlobTool) Description() string { return GlobDescription }
 func (t *GlobTool) Schema() *ToolSchema {
-	return &ToolSchema{Name: t.Name(), Description: t.Description(), Parameters: map[string]any{
+	return &ToolSchema{Name: t.Name(), Description: t.Description(), Access: ToolAccessRead, Parameters: map[string]any{
 		"type": "object", "properties": map[string]any{
 			"pattern":     map[string]any{"type": "string", "description": "Glob pattern, for example **/*.go."},
 			"path":        map[string]any{"type": "string", "description": "Directory to search.", "default": "."},

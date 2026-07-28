@@ -49,6 +49,7 @@ func (t *BashTool) Schema() *ToolSchema {
 	return &ToolSchema{
 		Name:        t.Name(),
 		Description: t.Description(),
+		Access:      ToolAccessExclusive,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

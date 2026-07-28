@@ -16,7 +16,7 @@ func (t *LoadTool) Description() string {
 	return "Load and activate a named local skill SOP for the current task."
 }
 func (t *LoadTool) Schema() *tool.ToolSchema {
-	return &tool.ToolSchema{Name: t.Name(), Description: t.Description(), Parameters: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string", "description": "The skill name from the available skills catalog."}, "arguments": map[string]any{"type": "string", "description": "Optional arguments passed to the skill."}}, "required": []string{"name"}}}
+	return &tool.ToolSchema{Name: t.Name(), Description: t.Description(), Access: tool.ToolAccessRead, Parameters: map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string", "description": "The skill name from the available skills catalog."}, "arguments": map[string]any{"type": "string", "description": "Optional arguments passed to the skill."}}, "required": []string{"name"}}}
 }
 func (t *LoadTool) Execute(_ context.Context, args map[string]any) tool.ToolResult {
 	name, _ := args["name"].(string)

@@ -28,6 +28,7 @@ func (t *ReadFileTool) Schema() *ToolSchema {
 	return &ToolSchema{
 		Name:        t.Name(),
 		Description: t.Description(),
+		Access:      ToolAccessRead,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

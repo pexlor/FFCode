@@ -11,6 +11,7 @@ type ToolSchema struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+	Access      ToolAccess
 }
 
 type Tool interface {

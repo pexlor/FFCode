@@ -500,34 +500,25 @@ func (a *Agent) executeTool(ctx context.Context, call llm.ToolCallComplete) tool
 	return a.toolManager.Execute(ctx, call.ToolName, call.Arguments)
 }
 
-type completedToolCall struct {
-	index  int
-	call   llm.ToolCallComplete
-	result tool.ToolResult
-}
-
-// executeTools starts every tool call in an iteration concurrently. Results are
-// returned in call order because tool-result protocols associate the response
-// sequence with the corresponding assistant tool-use sequence.
+// executeTools delegates scheduling to ToolsManager and maps ordered results
+// back to the model's tool-use IDs.
 func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, events chan<- AgentEvent) []conversation.ToolResultBlock {
 	return a.executeToolsWithBlocked(ctx, calls, nil, events)
 }
 
 func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCallComplete, blocked map[string]ProgressDecision, events chan<- AgentEvent) []conversation.ToolResultBlock {
-	completed := make(chan completedToolCall, len(calls))
-	executing := 0
+	invocations := make([]tool.Invocation, 0, len(calls))
+	invocationIndexes := make([]int, 0, len(calls))
 	for index, call := range calls {
 		if _, isBlocked := blocked[call.ToolID]; isBlocked {
 			continue
 		}
-		executing++
 		sendAgentEvent(ctx, events, ToolExecutionStartEvent{
 			ToolUseID: call.ToolID,
 			ToolName:  call.ToolName,
 		})
-		go func(index int, call llm.ToolCallComplete) {
-			completed <- completedToolCall{index: index, call: call, result: a.executeTool(ctx, call)}
-		}(index, call)
+		invocations = append(invocations, tool.Invocation{ID: call.ToolID, Name: call.ToolName, Arguments: call.Arguments})
+		invocationIndexes = append(invocationIndexes, index)
 	}
 
 	results := make([]conversation.ToolResultBlock, len(calls))
@@ -552,23 +543,20 @@ func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCal
 			IsError:   true,
 		}
 	}
-	for range executing {
-		var outcome completedToolCall
-		select {
-		case outcome = <-completed:
-		case <-ctx.Done():
-			return results
-		}
-		results[outcome.index] = conversation.ToolResultBlock{
-			ToolUseID: outcome.call.ToolID,
-			Content:   outcome.result.Output,
-			IsError:   outcome.result.IsError,
+	executed := a.toolManager.ExecuteBatch(ctx, invocations)
+	for resultIndex, outcome := range executed {
+		callIndex := invocationIndexes[resultIndex]
+		call := calls[callIndex]
+		results[callIndex] = conversation.ToolResultBlock{
+			ToolUseID: call.ToolID,
+			Content:   outcome.Output,
+			IsError:   outcome.IsError,
 		}
 		sendAgentEvent(ctx, events, ToolResultEvent{
-			ToolUseID: outcome.call.ToolID,
-			ToolName:  outcome.call.ToolName,
-			Content:   outcome.result.Output,
-			IsError:   outcome.result.IsError,
+			ToolUseID: call.ToolID,
+			ToolName:  call.ToolName,
+			Content:   outcome.Output,
+			IsError:   outcome.IsError,
 		})
 	}
 	return results

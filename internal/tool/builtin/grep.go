@@ -20,7 +20,7 @@ type GrepTool struct{}
 func (t *GrepTool) Name() string        { return "Grep" }
 func (t *GrepTool) Description() string { return GrepDescription }
 func (t *GrepTool) Schema() *ToolSchema {
-	return &ToolSchema{Name: t.Name(), Description: t.Description(), Parameters: map[string]any{
+	return &ToolSchema{Name: t.Name(), Description: t.Description(), Access: ToolAccessRead, Parameters: map[string]any{
 		"type": "object", "properties": map[string]any{
 			"pattern":     map[string]any{"type": "string", "description": "Go regular expression to search for."},
 			"path":        map[string]any{"type": "string", "description": "File or directory to search.", "default": "."},

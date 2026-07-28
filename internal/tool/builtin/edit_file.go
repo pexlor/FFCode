@@ -15,7 +15,7 @@ type EditFileTool struct{}
 func (t *EditFileTool) Name() string        { return "EditFile" }
 func (t *EditFileTool) Description() string { return EditFileDescription }
 func (t *EditFileTool) Schema() *ToolSchema {
-	return &ToolSchema{Name: t.Name(), Description: t.Description(), Parameters: map[string]any{
+	return &ToolSchema{Name: t.Name(), Description: t.Description(), Access: ToolAccessWrite, Parameters: map[string]any{
 		"type": "object", "properties": map[string]any{
 			"file_path":   map[string]any{"type": "string"},
 			"old_string":  map[string]any{"type": "string", "description": "Exact text to replace."},

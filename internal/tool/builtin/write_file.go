@@ -15,7 +15,7 @@ type WriteFileTool struct{}
 func (t *WriteFileTool) Name() string        { return "WriteFile" }
 func (t *WriteFileTool) Description() string { return WriteFileDescription }
 func (t *WriteFileTool) Schema() *ToolSchema {
-	return &ToolSchema{Name: t.Name(), Description: t.Description(), Parameters: map[string]any{
+	return &ToolSchema{Name: t.Name(), Description: t.Description(), Access: ToolAccessWrite, Parameters: map[string]any{
 		"type": "object", "properties": map[string]any{
 			"file_path": map[string]any{"type": "string", "description": "File to create or replace."},
 			"content":   map[string]any{"type": "string", "description": "Complete UTF-8 file contents."},
