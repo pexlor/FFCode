@@ -34,6 +34,11 @@ def classify_results(results, evaluated):
         if instance_id in evaluated:
             continue
         item = results[instance_id]
+        # A runner_error is retryable: the agent runner may replace this
+        # record with a patch on its next attempt. Do not consume it as an
+        # empty terminal result while that retry is still pending.
+        if item.get("status") in {"running", "runner_error"}:
+            continue
         patch_path = Path(item.get("patch_path", ""))
         if item.get("patch_bytes", 0) > 0 and patch_path.is_file() and patch_path.stat().st_size > 0:
             pending.append(item)

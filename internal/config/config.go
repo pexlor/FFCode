@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	DefaultContextWindow = 128000
+	DefaultContextWindow = 256000
 	DefaultOutputReserve = 8192
 )
 

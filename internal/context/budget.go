@@ -27,11 +27,11 @@ type ContextPolicy struct {
 	MinCompactionIncrementTokens int
 }
 
-// DefaultPolicy 返回偏保守的 MVP 默认值。
-// 75% 是相对于 HardInputLimit 的软压缩线，而不是相对于模型完整窗口。
+// DefaultPolicy 返回适用于大上下文模型的默认值。
+// 90% 是相对于 HardInputLimit 的软压缩线，而不是相对于模型完整窗口。
 func DefaultPolicy() ContextPolicy {
 	return ContextPolicy{
-		SoftCompactRatio:             0.75,
+		SoftCompactRatio:             0.90,
 		SafetyMarginRatio:            0.05,
 		ReservedToolResultRatio:      0.10,
 		ToolHistoryRatio:             0.25,
@@ -97,7 +97,7 @@ func NewBudget(model ModelContextSpec, policy ContextPolicy) (ContextBudget, err
 		HardInputLimit:        hard,
 		SoftCompactLimit:      int(float64(hard) * policy.SoftCompactRatio),
 		ToolHistoryLimit:      int(float64(hard) * policy.ToolHistoryRatio),
-		SingleToolResultLimit: min(2000, int(float64(hard)*policy.SingleToolResultRatio)),
-		ToolBatchLimit:        min(6000, int(float64(hard)*policy.ToolBatchRatio)),
+		SingleToolResultLimit: min(8000, int(float64(hard)*policy.SingleToolResultRatio)),
+		ToolBatchLimit:        min(24000, int(float64(hard)*policy.ToolBatchRatio)),
 	}, nil
 }

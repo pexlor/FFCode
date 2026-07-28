@@ -42,7 +42,7 @@ model:
   max_tokens: 8192
 
 context:
-  window: 128000
+  window: 256000
   output_reserve: 8192
 
 memory:
@@ -122,7 +122,7 @@ summary:
   api_key: ""
 
 context:
-  window: 128000
+  window: 256000
   output_reserve: 8192
 
 memory:

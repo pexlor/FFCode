@@ -138,4 +138,7 @@ func TestMemoryConfigDefaults(t *testing.T) {
 	if !got.Memory.Generate || !got.Memory.Use || got.Memory.Root == "" || got.Memory.ExtractionConcurrency <= 0 {
 		t.Fatalf("unexpected defaults: %+v", got.Memory)
 	}
+	if got.Context.Window != 256_000 || got.Context.OutputReserve != 8_192 {
+		t.Fatalf("unexpected context defaults: %+v", got.Context)
+	}
 }

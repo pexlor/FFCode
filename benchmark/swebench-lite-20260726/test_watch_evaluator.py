@@ -49,6 +49,14 @@ class WatchEvaluatorTest(unittest.TestCase):
         self.assertEqual(pending, [])
         self.assertEqual([item["instance_id"] for item in skipped], ["missing"])
 
+    def test_retryable_runner_error_is_not_consumed_as_empty_patch(self):
+        result = {"instance_id": "retryable", "status": "runner_error", "patch_bytes": 0}
+
+        pending, skipped = watch_evaluator.classify_results({"retryable": result}, {})
+
+        self.assertEqual(pending, [])
+        self.assertEqual(skipped, [])
+
 
 if __name__ == "__main__":
     unittest.main()
