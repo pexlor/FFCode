@@ -12,12 +12,12 @@ myCode 是一个面向开发者的 CLI 代码智能代理（Code Agent）系统�
 ## CLI
 仅支持 CLI
 '''
-mycode chat
-mycode run "fix login bug"
-mycode apply "refactor auth module"
-mycode test
-mycode commit "fix auth bug"
-mycode index
+ffcode chat
+ffcode run "fix login bug"
+ffcode apply "refactor auth module"
+ffcode test
+ffcode commit "fix auth bug"
+ffcode index
 ''' 
 
 ## 运行模式

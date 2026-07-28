@@ -34,7 +34,7 @@ Agent 使用统一的结束函数触发 `stop`，覆盖成功、Provider 失败�
 
 ### 工作区配置
 
-项目 Hook 默认关闭，因为配置中的命令会以 MyCode 进程的用户权限运行。确认工作区可信后，在用户配置 `~/.mycode/config.yaml` 中显式启用：
+项目 Hook 默认关闭，因为配置中的命令会以 MyCode 进程的用户权限运行。确认工作区可信后，在用户配置 `~/.ffcode/config.yaml` 中显式启用：
 
 ```yaml
 hooks:
@@ -45,7 +45,7 @@ hooks:
 
 1. `.agent/hooks.yaml`
 2. `.agent/hooks.yml`
-3. `.mycode/hooks.yaml`
+3. `.ffcode/hooks.yaml`
 
 也可以用 `MYCODE_HOOK_CONFIG` 显式指定配置文件；该环境变量本身视为本次运行的启用授权。Hook 配置示例：
 

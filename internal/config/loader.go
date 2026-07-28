@@ -14,7 +14,7 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve user home: %w", err)
 	}
-	return filepath.Join(home, ".mycode", "config.yaml"), nil
+	return filepath.Join(home, ".ffcode", "config.yaml"), nil
 }
 
 func Load(warnings io.Writer) (Config, error) {

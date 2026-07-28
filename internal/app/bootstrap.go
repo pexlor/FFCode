@@ -176,7 +176,7 @@ func loadHooks(config appconfig.Config, workspace string) (*hook.Dispatcher, err
 func defaultSkillSources(workspace string) []skill.Source {
 	sources := []skill.Source{{Scope: skill.Project, Root: filepath.Join(workspace, ".agent", "skills")}}
 	if userConfig, err := os.UserConfigDir(); err == nil {
-		sources = append(sources, skill.Source{Scope: skill.User, Root: filepath.Join(userConfig, "mycode", "skills")})
+		sources = append(sources, skill.Source{Scope: skill.User, Root: filepath.Join(userConfig, "ffcode", "skills")})
 	}
 	if executable, err := os.Executable(); err == nil {
 		sources = append(sources, skill.Source{Scope: skill.Builtin, Root: filepath.Join(filepath.Dir(executable), "skills")})

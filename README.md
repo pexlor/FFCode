@@ -1,6 +1,6 @@
 # FFCode
 
-MyCode 是一个运行在终端里的开源代码 Agent。它把大语言模型（LLM）、文件与 Shell 工具、MCP（Model Context Protocol）以及权限控制组合成一个可审计、可扩展的开发工作流。
+FFCode 是一个运行在终端里的开源代码 Agent。它把大语言模型（LLM）、文件与 Shell 工具、MCP（Model Context Protocol）以及权限控制组合成一个可审计、可扩展的开发工作流。
 
 它可以先阅读代码和上下文，再调用工具执行检查、修改文件、运行命令，并把会话、检查点和长期记忆持久化下来。
 
@@ -28,12 +28,12 @@ MyCode 是一个运行在终端里的开源代码 Agent。它把大语言模型�
 
 ### 配置模型
 
-MyCode 默认读取 `~/.mycode/config.yaml`。先创建配置文件：
+FFCode 默认读取 `~/.ffcode/config.yaml`。先创建配置文件：
 
 ```bash
-mkdir -p ~/.mycode
-chmod 700 ~/.mycode
-cat > ~/.mycode/config.yaml <<'YAML'
+mkdir -p ~/.ffcode
+chmod 700 ~/.ffcode
+cat > ~/.ffcode/config.yaml <<'YAML'
 model:
   protocol: openai-compat
   base_url: https://api.openai.com/v1
@@ -49,7 +49,7 @@ memory:
   generate: true
   use: true
 YAML
-chmod 600 ~/.mycode/config.yaml
+chmod 600 ~/.ffcode/config.yaml
 ```
 
 使用 Anthropic 时，将 `protocol` 改为 `anthropic`，并把 `name` 换成目标模型名称
@@ -58,7 +58,7 @@ chmod 600 ~/.mycode/config.yaml
 
 ```bash
 git clone <your-fork-url>
-cd MyCode
+cd FFCode
 mkdir -p ./bin
 go build -o ./bin/ffcode ./cmd/FFCode
 ./bin/ffcode
@@ -178,7 +178,7 @@ mcpServers:
     env: {}
 ```
 
-MCP Server 的进程生命周期由 MyCode 管理；工具名称不能与内置工具冲突。详见 [`internal/mcp/README.md`](./internal/mcp/README.md)。
+MCP Server 的进程生命周期由 FFCode 管理；工具名称不能与内置工具冲突。详见 [`internal/mcp/README.md`](./internal/mcp/README.md)。
 
 ### Skill
 
@@ -186,7 +186,7 @@ Skill 默认从以下目录发现，优先级为“项目级 > 用户级 > 内�
 
 ```text
 <workspace>/.agent/skills/
-<user-config-dir>/mycode/skills/
+<user-config-dir>/ffcode/skills/
 <install-root>/skills/
 ```
 

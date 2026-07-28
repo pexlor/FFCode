@@ -15,7 +15,7 @@ import (
 var defaultWorkspaceConfigPaths = []string{
 	filepath.Join(".agent", "hooks.yaml"),
 	filepath.Join(".agent", "hooks.yml"),
-	filepath.Join(".mycode", "hooks.yaml"),
+	filepath.Join(".ffcode", "hooks.yaml"),
 }
 
 // LoadWorkspace loads the first hook configuration present in workspace. A

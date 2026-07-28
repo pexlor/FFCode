@@ -282,7 +282,7 @@ REPL 提供以下命令：
 5. 实现带预算、取消和结果摘要的 `SkillRunner`，启用 Fork 模式。
 
 当前版本的默认发现目录为 `<workspace>/.agent/skills`、
-`<user-config-dir>/mycode/skills` 和 `<executable-dir>/skills`。无显式
+`<user-config-dir>/ffcode/skills` 和 `<executable-dir>/skills`。无显式
 `.agent/permission.yaml` 时，`load_skill` 默认处于允许列表；若项目提供了
 自定义权限策略，则需显式允许 `load_skill`。
 

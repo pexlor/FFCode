@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 让 MyCode 从 `~/.mycode/config.yaml` 加载模型、摘要模型和上下文配置，同时允许已有环境变量覆盖文件值。
+**目标：** 让 MyCode 从 `~/.ffcode/config.yaml` 加载模型、摘要模型和上下文配置，同时允许已有环境变量覆盖文件值。
 
 **架构：** 在 `internal/config` 中建立独立的配置加载边界，依次完成 YAML 解码、默认值、环境变量覆盖、校验和权限警告。REPL 只接收已解析的配置来组装运行时，并用最终配置显示欢迎信息，不再直接读取模型相关环境变量。
 
@@ -192,7 +192,7 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve user home: %w", err)
 	}
-	return filepath.Join(home, ".mycode", "config.yaml"), nil
+	return filepath.Join(home, ".ffcode", "config.yaml"), nil
 }
 
 func Load(warnings io.Writer) (Config, error) {

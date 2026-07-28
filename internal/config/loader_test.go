@@ -29,6 +29,20 @@ func TestLoadFileReadsThinkingEffortAndBudget(t *testing.T) {
 	}
 }
 
+func TestDefaultPathUsesFFCodeDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".ffcode", "config.yaml")
+	if got != want {
+		t.Fatalf("default config path = %q, want %q", got, want)
+	}
+}
+
 func TestLoadFileRejectsInvalidThinkingEffort(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	data := []byte(`model:

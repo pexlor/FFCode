@@ -43,7 +43,7 @@ const (
 
 ## 配置与优先级
 
-用户级配置文件 `~/.mycode/config.yaml` 增加：
+用户级配置文件 `~/.ffcode/config.yaml` 增加：
 
 ```yaml
 permission:
@@ -65,7 +65,7 @@ type PermissionConfig struct {
 最终模式的优先级为：
 
 ```text
---choose-permissions 本次选择 > ~/.mycode/config.yaml > ask
+--choose-permissions 本次选择 > ~/.ffcode/config.yaml > ask
 ```
 
 启动选择和运行时命令只修改当前进程，不回写配置文件。
