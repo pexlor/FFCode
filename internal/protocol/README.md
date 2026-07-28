@@ -52,6 +52,8 @@
 当前事件类型：
 
 - `turn_started`：Turn 开始。
+- `run_phase_changed`：运行阶段发生变化。
+- `provider_retry`：可恢复的 Provider 请求将在给定延迟后重试。
 - `thinking_started`、`thinking_delta`：Thinking 开始及增量内容。
 - `text_delta`：模型文本增量。
 - `tool_call_started`、`tool_call_delta`、`tool_call_completed`：Tool Call 的开始、参数增量和完成。

@@ -31,6 +31,7 @@ func newOpenAiCompatClient(parm *ModelParm) (*OpenAiCompatClient, error) {
 	client := openai.NewClient(
 		option.WithAPIKey(parm.APIKey),
 		option.WithBaseURL(parm.BaseURL),
+		option.WithMaxRetries(0),
 	)
 	return &OpenAiCompatClient{
 		client:    client,
@@ -136,7 +137,7 @@ func (c *OpenAiCompatClient) Stream(req *StreamRequest) (<-chan StreamEvent, <-c
 			case onechunk := <-streamChan:
 				if onechunk.finished {
 					if err := stream.Err(); err != nil {
-						errsChan <- err
+						errsChan <- NormalizeProviderError("openai", err)
 					} else if stopReason != "" {
 						eventsChan <- StreamEnd{StopReason: stopReason, Usage: usage}
 					}

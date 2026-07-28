@@ -1,6 +1,10 @@
 package agent
 
-import "MyCode/internal/llm"
+import (
+	"time"
+
+	"MyCode/internal/llm"
+)
 
 type AgentEvent interface{ agentEvent() }
 
@@ -42,6 +46,13 @@ type RunPhaseEvent struct {
 	Phase    RunPhase
 	Previous RunPhase
 	Reason   PhaseReason
+}
+
+type ProviderRetryEvent struct {
+	Attempt   int
+	Delay     time.Duration
+	Provider  string
+	ErrorType string
 }
 
 type ToolCallStartEvent struct {
@@ -98,6 +109,7 @@ func (TextEvent) agentEvent()               {}
 func (ThinkingEvent) agentEvent()           {}
 func (ThinkingStartEvent) agentEvent()      {}
 func (RunPhaseEvent) agentEvent()           {}
+func (ProviderRetryEvent) agentEvent()      {}
 func (ToolCallStartEvent) agentEvent()      {}
 func (ToolCallDeltaEvent) agentEvent()      {}
 func (ToolCallCompleteEvent) agentEvent()   {}

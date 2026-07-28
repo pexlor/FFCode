@@ -3,10 +3,36 @@ package llm
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"MyCode/internal/conversation"
 )
+
+func TestAnthropicStreamReturnsStructuredProviderError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Retry-After", "2")
+		writer.WriteHeader(529)
+		_, _ = writer.Write([]byte(`{"type":"error","error":{"type":"overloaded_error"}}`))
+	}))
+	defer server.Close()
+	client, err := newAnthropicClient(&ModelParm{APIKey: "key", BaseURL: server.URL, ModelName: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, errorsChannel := client.Stream(&StreamRequest{Context: context.Background()})
+	got := <-errorsChannel
+	var providerErr *ProviderError
+	if !errors.As(got, &providerErr) {
+		t.Fatalf("error = %T %v", got, got)
+	}
+	if providerErr.StatusCode != 529 || !providerErr.Retryable || providerErr.RetryAfter != 2*time.Second {
+		t.Fatalf("provider error = %+v", providerErr)
+	}
+}
 
 func TestAnthropicMalformedToolInputIsRetryable(t *testing.T) {
 	state := anthropicStreamState{blocks: make(map[int]*anthropicBlockState)}

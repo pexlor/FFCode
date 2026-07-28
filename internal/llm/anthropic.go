@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -188,17 +189,17 @@ func (c *AnthropicClient) Stream(req *StreamRequest) (<-chan StreamEvent, <-chan
 		httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
-			errs <- err
+			errs <- NormalizeProviderError("anthropic", err)
 			return
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-			errs <- fmt.Errorf("Anthropic API returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+			errs <- NewHTTPProviderError("anthropic", resp.StatusCode, resp.Header, strings.TrimSpace(string(data)))
 			return
 		}
 		if err := consumeAnthropicStream(req.Context, resp.Body, events); err != nil {
-			errs <- err
+			errs <- NormalizeProviderError("anthropic", err)
 		}
 	}()
 	return events, errs
@@ -282,9 +283,12 @@ func consumeAnthropicStream(ctx context.Context, reader io.Reader, output chan<-
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: %v", ErrIncompleteStream, err)
 	}
-	return fmt.Errorf("Anthropic stream ended before message_stop")
+	return fmt.Errorf("%w: Anthropic stream ended before message_stop", ErrIncompleteStream)
 }
 
 func (s *anthropicStreamState) consume(event anthropicSSEEvent) ([]StreamEvent, bool, error) {
@@ -343,7 +347,8 @@ func (s *anthropicStreamState) consume(event anthropicSSEEvent) ([]StreamEvent, 
 		}
 		return []StreamEvent{StreamEnd{StopReason: s.stopReason, Usage: s.usage}}, true, nil
 	case "error":
-		return nil, false, fmt.Errorf("Anthropic stream error %s: %s", event.Error.Type, event.Error.Message)
+		retryable := event.Error.Type == "overloaded_error" || event.Error.Type == "rate_limit_error"
+		return nil, false, &ProviderError{Provider: "anthropic", ErrorType: event.Error.Type, Retryable: retryable, Err: errors.New(event.Error.Message)}
 	case "ping":
 	default:
 		return nil, false, fmt.Errorf("unknown Anthropic stream event type %q", event.Type)

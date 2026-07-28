@@ -15,16 +15,15 @@ import (
 
 const DefaultMaxIterations = 800
 
-const malformedToolInputRetries = 1
-
 type Agent struct {
-	ctx            context.Context
-	client         llm.LLMClient
-	toolManager    *tool.ToolsManager
-	contextManager *contextmanager.ContextManager
-	skillManager   *skill.Manager
-	MaxIterations  int
-	RunBudget      RunBudget
+	ctx                 context.Context
+	client              llm.LLMClient
+	toolManager         *tool.ToolsManager
+	contextManager      *contextmanager.ContextManager
+	skillManager        *skill.Manager
+	MaxIterations       int
+	RunBudget           RunBudget
+	ProviderRetryPolicy llm.RetryPolicy
 }
 
 func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.ToolsManager) (*Agent, error) {
@@ -38,11 +37,12 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 		toolManager = tool.NewToolsManager()
 	}
 	return &Agent{
-		ctx:           ctx,
-		client:        client,
-		toolManager:   toolManager,
-		MaxIterations: DefaultMaxIterations,
-		RunBudget:     DefaultRunBudget(),
+		ctx:                 ctx,
+		client:              client,
+		toolManager:         toolManager,
+		MaxIterations:       DefaultMaxIterations,
+		RunBudget:           DefaultRunBudget(),
+		ProviderRetryPolicy: llm.DefaultRetryPolicy(),
 	}, nil
 }
 
@@ -144,7 +144,6 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			var assistantText, stopReason string
 			var thinkingBlocks []conversation.ThinkingBlock
 			var toolCalls []llm.ToolCallComplete
-			var usage llm.UsageInfo
 			for attempt := 0; ; attempt++ {
 				sendAgentEvent(ctx, agentEventCh, ThinkingStartEvent{})
 				events, errs := a.client.Stream(&llm.StreamRequest{
@@ -154,20 +153,38 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 					Tools:        toolSchemas,
 				})
 
-				var err error
-				assistantText, thinkingBlocks, toolCalls, stopReason, usage, err = a.handleStream(ctx, events, errs, agentEventCh)
-				if budgetErr := budgetState.recordUsage(usage); budgetErr != nil {
+				result, err := a.collectStream(ctx, events, errs)
+				if budgetErr := budgetState.recordUsage(result.usage); budgetErr != nil {
 					sendTurnEndEvent(agentEventCh, turnEndFromError(budgetErr, budgetState.usage))
 					return
 				}
 				if err == nil {
+					if err := publishAttemptEvents(ctx, agentEventCh, result.events); err != nil {
+						sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+						return
+					}
+					assistantText = result.assistantText
+					thinkingBlocks = result.thinkingBlocks
+					toolCalls = result.toolCalls
+					stopReason = result.stopReason
 					break
 				}
-				if errors.Is(err, llm.ErrMalformedToolInput) && attempt < malformedToolInputRetries {
-					continue
+				err = llm.NormalizeProviderError("model", err)
+				if !a.ProviderRetryPolicy.ShouldRetry(err, attempt) {
+					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					return
 				}
-				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
-				return
+				if budgetErr := budgetState.reserveProviderRetry(); budgetErr != nil {
+					sendTurnEndEvent(agentEventCh, turnEndFromError(budgetErr, budgetState.usage))
+					return
+				}
+				delay := a.ProviderRetryPolicy.Delay(attempt, err)
+				provider, errorType := providerErrorDetails(err)
+				sendAgentEvent(ctx, agentEventCh, ProviderRetryEvent{Attempt: attempt + 2, Delay: delay, Provider: provider, ErrorType: errorType})
+				if err := llm.WaitForRetry(ctx, delay); err != nil {
+					sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
+					return
+				}
 			}
 
 			if len(toolCalls) == 0 {
@@ -282,6 +299,8 @@ func turnEndFromError(err error, usage llm.UsageInfo) TurnEndEvent {
 	case errors.As(err, new(*budgetExceededError)):
 		result.Status = TurnIncomplete
 		result.StopReason = StopBudgetExceeded
+	case errors.As(err, new(*llm.ProviderError)):
+		result.StopReason = StopProviderError
 	case errors.Is(err, context.Canceled):
 		result.Status = TurnCancelled
 		result.StopReason = StopCancelled
@@ -333,10 +352,20 @@ func (a *Agent) validate(session *conversation.Session) error {
 	return nil
 }
 
-func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent, errs <-chan error, out chan<- AgentEvent) (string, []conversation.ThinkingBlock, []llm.ToolCallComplete, string, llm.UsageInfo, error) {
+type modelAttempt struct {
+	assistantText  string
+	thinkingBlocks []conversation.ThinkingBlock
+	toolCalls      []llm.ToolCallComplete
+	stopReason     string
+	usage          llm.UsageInfo
+	events         []AgentEvent
+}
+
+func (a *Agent) collectStream(ctx context.Context, events <-chan llm.StreamEvent, errs <-chan error) (modelAttempt, error) {
 	var assistantText strings.Builder
 	var thinkingBlocks []conversation.ThinkingBlock
 	var toolCalls []llm.ToolCallComplete
+	var bufferedEvents []AgentEvent
 	stopReason := ""
 	var usage llm.UsageInfo
 
@@ -350,18 +379,18 @@ func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent,
 			switch ev := event.(type) {
 			case llm.TextStream:
 				assistantText.WriteString(ev.Text)
-				sendAgentEvent(ctx, out, TextEvent{Text: ev.Text})
+				bufferedEvents = append(bufferedEvents, TextEvent{Text: ev.Text})
 			case llm.ThinkingStream:
-				sendAgentEvent(ctx, out, ThinkingEvent{Text: ev.Text})
+				bufferedEvents = append(bufferedEvents, ThinkingEvent{Text: ev.Text})
 			case llm.ThinkingComplete:
 				thinkingBlocks = append(thinkingBlocks, conversation.ThinkingBlock{Thinking: ev.Thinking, Signature: ev.Signature})
 			case llm.ToolCallStart:
-				sendAgentEvent(ctx, out, ToolCallStartEvent{ToolUseID: ev.ToolID, ToolName: ev.ToolName})
+				bufferedEvents = append(bufferedEvents, ToolCallStartEvent{ToolUseID: ev.ToolID, ToolName: ev.ToolName})
 			case llm.ToolCallStream:
-				sendAgentEvent(ctx, out, ToolCallDeltaEvent{ToolUseID: ev.ToolID, Text: ev.Text})
+				bufferedEvents = append(bufferedEvents, ToolCallDeltaEvent{ToolUseID: ev.ToolID, Text: ev.Text})
 			case llm.ToolCallComplete:
 				toolCalls = append(toolCalls, ev)
-				sendAgentEvent(ctx, out, ToolCallCompleteEvent{ToolUseID: ev.ToolID, ToolName: ev.ToolName, Arguments: ev.Arguments})
+				bufferedEvents = append(bufferedEvents, ToolCallCompleteEvent{ToolUseID: ev.ToolID, ToolName: ev.ToolName, Arguments: ev.Arguments})
 			case llm.StreamEnd:
 				stopReason = ev.StopReason
 				usage = ev.Usage
@@ -372,14 +401,31 @@ func (a *Agent) handleStream(ctx context.Context, events <-chan llm.StreamEvent,
 				continue
 			}
 			if err != nil {
-				return assistantText.String(), thinkingBlocks, toolCalls, stopReason, usage, err
+				return modelAttempt{assistantText: assistantText.String(), thinkingBlocks: thinkingBlocks, toolCalls: toolCalls, stopReason: stopReason, usage: usage, events: bufferedEvents}, err
 			}
 		case <-ctx.Done():
-			return assistantText.String(), thinkingBlocks, toolCalls, stopReason, usage, ctx.Err()
+			return modelAttempt{assistantText: assistantText.String(), thinkingBlocks: thinkingBlocks, toolCalls: toolCalls, stopReason: stopReason, usage: usage, events: bufferedEvents}, ctx.Err()
 		}
 	}
 
-	return assistantText.String(), thinkingBlocks, toolCalls, stopReason, usage, nil
+	return modelAttempt{assistantText: assistantText.String(), thinkingBlocks: thinkingBlocks, toolCalls: toolCalls, stopReason: stopReason, usage: usage, events: bufferedEvents}, nil
+}
+
+func publishAttemptEvents(ctx context.Context, output chan<- AgentEvent, events []AgentEvent) error {
+	for _, event := range events {
+		if !sendAgentEvent(ctx, output, event) {
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func providerErrorDetails(err error) (string, string) {
+	var providerErr *llm.ProviderError
+	if !errors.As(err, &providerErr) {
+		return "", ""
+	}
+	return providerErr.Provider, providerErr.ErrorType
 }
 
 func addUsage(u, other llm.UsageInfo) llm.UsageInfo {

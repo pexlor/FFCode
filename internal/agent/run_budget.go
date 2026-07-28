@@ -13,28 +13,31 @@ const (
 	defaultRunInputTokens  = 2_000_000
 	defaultRunOutputTokens = 128_000
 	defaultRunToolCalls    = 512
+	defaultProviderRetries = 2
 )
 
 // RunBudget bounds the resources consumed by one user turn. A zero field is
 // unlimited when a caller supplies an explicit budget.
 type RunBudget struct {
-	MaxDuration     time.Duration
-	MaxInputTokens  int64
-	MaxOutputTokens int64
-	MaxToolCalls    int
+	MaxDuration        time.Duration
+	MaxInputTokens     int64
+	MaxOutputTokens    int64
+	MaxToolCalls       int
+	MaxProviderRetries int
 }
 
 func DefaultRunBudget() RunBudget {
 	return RunBudget{
-		MaxDuration:     defaultRunDuration,
-		MaxInputTokens:  defaultRunInputTokens,
-		MaxOutputTokens: defaultRunOutputTokens,
-		MaxToolCalls:    defaultRunToolCalls,
+		MaxDuration:        defaultRunDuration,
+		MaxInputTokens:     defaultRunInputTokens,
+		MaxOutputTokens:    defaultRunOutputTokens,
+		MaxToolCalls:       defaultRunToolCalls,
+		MaxProviderRetries: defaultProviderRetries,
 	}
 }
 
 func (b RunBudget) validate() error {
-	if b.MaxDuration < 0 || b.MaxInputTokens < 0 || b.MaxOutputTokens < 0 || b.MaxToolCalls < 0 {
+	if b.MaxDuration < 0 || b.MaxInputTokens < 0 || b.MaxOutputTokens < 0 || b.MaxToolCalls < 0 || b.MaxProviderRetries < 0 {
 		return fmt.Errorf("run budget limits cannot be negative")
 	}
 	return nil
@@ -43,9 +46,10 @@ func (b RunBudget) validate() error {
 type budgetResource string
 
 const (
-	budgetInputTokens  budgetResource = "input_tokens"
-	budgetOutputTokens budgetResource = "output_tokens"
-	budgetToolCalls    budgetResource = "tool_calls"
+	budgetInputTokens     budgetResource = "input_tokens"
+	budgetOutputTokens    budgetResource = "output_tokens"
+	budgetToolCalls       budgetResource = "tool_calls"
+	budgetProviderRetries budgetResource = "provider_retries"
 )
 
 type budgetExceededError struct {
@@ -59,10 +63,11 @@ func (e *budgetExceededError) Error() string {
 }
 
 type runBudgetState struct {
-	budget    RunBudget
-	usage     llm.UsageInfo
-	toolCalls int
-	startedAt time.Time
+	budget          RunBudget
+	usage           llm.UsageInfo
+	toolCalls       int
+	providerRetries int
+	startedAt       time.Time
 }
 
 func newRunBudgetState(budget RunBudget) (*runBudgetState, error) {
@@ -89,6 +94,15 @@ func (s *runBudgetState) reserveToolCalls(count int) error {
 		return &budgetExceededError{resource: budgetToolCalls, limit: int64(limit), used: int64(used)}
 	}
 	s.toolCalls = used
+	return nil
+}
+
+func (s *runBudgetState) reserveProviderRetry() error {
+	used := s.providerRetries + 1
+	if limit := s.budget.MaxProviderRetries; limit > 0 && used > limit {
+		return &budgetExceededError{resource: budgetProviderRetries, limit: int64(limit), used: int64(used)}
+	}
+	s.providerRetries = used
 	return nil
 }
 

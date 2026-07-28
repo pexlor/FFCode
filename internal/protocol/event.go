@@ -21,6 +21,13 @@ type runPhaseData struct {
 	Reason   string `json:"reason"`
 }
 
+type providerRetryData struct {
+	Attempt   int    `json:"attempt"`
+	DelayMS   int64  `json:"delay_ms"`
+	Provider  string `json:"provider,omitempty"`
+	ErrorType string `json:"error_type,omitempty"`
+}
+
 type toolData struct {
 	ToolUseID string         `json:"tool_use_id"`
 	ToolName  string         `json:"tool_name,omitempty"`
