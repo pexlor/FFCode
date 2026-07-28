@@ -15,6 +15,12 @@ type textData struct {
 	Text string `json:"text"`
 }
 
+type runPhaseData struct {
+	Phase    string `json:"phase"`
+	Previous string `json:"previous,omitempty"`
+	Reason   string `json:"reason"`
+}
+
 type toolData struct {
 	ToolUseID string         `json:"tool_use_id"`
 	ToolName  string         `json:"tool_name,omitempty"`

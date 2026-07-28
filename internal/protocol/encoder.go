@@ -31,6 +31,8 @@ func (e *Encoder) EncodeAgentEvent(sessionID, turnID string, event agent.AgentEv
 		eventType, data = "text_delta", textData{Text: item.Text}
 	case agent.ThinkingStartEvent:
 		eventType, data = "thinking_started", struct{}{}
+	case agent.RunPhaseEvent:
+		eventType, data = "run_phase_changed", runPhaseData{Phase: string(item.Phase), Previous: string(item.Previous), Reason: string(item.Reason)}
 	case agent.ThinkingEvent:
 		eventType, data = "thinking_delta", textData{Text: item.Text}
 	case agent.ToolCallStartEvent:

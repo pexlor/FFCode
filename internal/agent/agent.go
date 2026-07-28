@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const DefaultMaxIterations = 800
@@ -102,6 +103,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 		}
 		ctx, cancel := budgetState.context(ctx)
 		defer cancel()
+		phaseController := newRunPhaseController()
 
 		if err := a.validate(session); err != nil {
 			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
@@ -111,20 +113,23 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 			return
 		}
+		sendAgentEvent(ctx, agentEventCh, RunPhaseEvent{Phase: PhaseExplore, Reason: PhaseReasonRunStarted})
 
 		for iteration := 0; iteration < a.MaxIterations; iteration++ {
+			emitPhaseTransition(ctx, agentEventCh, phaseController.observeBudget(budgetState.snapshot(time.Now())))
 			toolSchemas := a.toolManager.BuildAllSchemas()
 			systemPrompt := session.SystemPrompt
 			if a.skillManager != nil {
 				systemPrompt = appendSkillPrompt(systemPrompt, a.skillManager.CatalogPrompt(), a.skillManager.Instructions())
 				toolSchemas = filterSkillTools(toolSchemas, a.skillManager.AllowedTools())
 			}
+			systemPrompt = appendSkillPrompt(systemPrompt, runPhaseGuidance(phaseController.phase()))
 			history := session.History
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
 				// Build 内部通过同步游标避免重复写 transcript，并通过摘要检查点避免重复压缩。
 				view, err := a.contextManager.Build(ctx, contextmanager.BuildInput{
-					Session: session, CurrentRequest: latestUserRequest(session.History),
+					Session: session, SystemPrompt: systemPrompt, CurrentRequest: latestUserRequest(session.History),
 					AvailableTools: toolSchemas,
 				})
 				if err != nil {
@@ -186,6 +191,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
 				return
 			}
+			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolCalls(toolCalls))
 
 			session.History = append(session.History, conversation.Message{
 				Role:           conversation.ASSISTANT,
@@ -196,6 +202,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 
 			toolResults := a.executeTools(ctx, toolCalls, agentEventCh)
 			session.AddToolResult(toolResults)
+			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolResults(toolCalls, phaseToolResults(toolResults)))
 		}
 
 		err = fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
@@ -203,6 +210,20 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 	}()
 
 	return agentEventCh
+}
+
+func emitPhaseTransition(ctx context.Context, events chan<- AgentEvent, transition phaseTransition) {
+	if transition.Changed {
+		sendAgentEvent(ctx, events, RunPhaseEvent{Phase: transition.To, Previous: transition.From, Reason: transition.Reason})
+	}
+}
+
+func phaseToolResults(results []conversation.ToolResultBlock) []tool.ToolResult {
+	converted := make([]tool.ToolResult, len(results))
+	for index, result := range results {
+		converted[index] = tool.ToolResult{Output: result.Content, IsError: result.IsError}
+	}
+	return converted
 }
 
 func appendSkillPrompt(base string, sections ...string) string {

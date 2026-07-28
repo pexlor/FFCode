@@ -62,13 +62,14 @@ type runBudgetState struct {
 	budget    RunBudget
 	usage     llm.UsageInfo
 	toolCalls int
+	startedAt time.Time
 }
 
 func newRunBudgetState(budget RunBudget) (*runBudgetState, error) {
 	if err := budget.validate(); err != nil {
 		return nil, err
 	}
-	return &runBudgetState{budget: budget}, nil
+	return &runBudgetState{budget: budget, startedAt: time.Now()}, nil
 }
 
 func (s *runBudgetState) recordUsage(usage llm.UsageInfo) error {
@@ -96,4 +97,31 @@ func (s *runBudgetState) context(parent context.Context) (context.Context, conte
 		return context.WithTimeout(parent, s.budget.MaxDuration)
 	}
 	return context.WithCancel(parent)
+}
+
+type runBudgetSnapshot struct {
+	Budget    RunBudget
+	Usage     llm.UsageInfo
+	ToolCalls int
+	Elapsed   time.Duration
+}
+
+func (s *runBudgetState) snapshot(now time.Time) runBudgetSnapshot {
+	return runBudgetSnapshot{Budget: s.budget, Usage: s.usage, ToolCalls: s.toolCalls, Elapsed: now.Sub(s.startedAt)}
+}
+
+func (s runBudgetSnapshot) softLimitReached(ratio float64) bool {
+	if ratio <= 0 || ratio > 1 {
+		return false
+	}
+	if s.Budget.MaxDuration > 0 && float64(s.Elapsed) >= float64(s.Budget.MaxDuration)*ratio {
+		return true
+	}
+	if s.Budget.MaxInputTokens > 0 && float64(s.Usage.InputTokens) >= float64(s.Budget.MaxInputTokens)*ratio {
+		return true
+	}
+	if s.Budget.MaxOutputTokens > 0 && float64(s.Usage.OutputTokens) >= float64(s.Budget.MaxOutputTokens)*ratio {
+		return true
+	}
+	return s.Budget.MaxToolCalls > 0 && float64(s.ToolCalls) >= float64(s.Budget.MaxToolCalls)*ratio
 }

@@ -37,6 +37,7 @@ type ContextView struct {
 // BuildInput 汇总构建模型请求所需的运行时信息。
 type BuildInput struct {
 	Session        *conversation.Session
+	SystemPrompt   string
 	CurrentTurnID  string
 	CurrentRequest string
 	AvailableTools []*tool.ToolSchema
@@ -152,7 +153,11 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	if err != nil {
 		return nil, err
 	}
-	systemPrompt := appendRules(input.Session.SystemPrompt, rules)
+	systemPrompt := input.SystemPrompt
+	if strings.TrimSpace(systemPrompt) == "" {
+		systemPrompt = input.Session.SystemPrompt
+	}
+	systemPrompt = appendRules(systemPrompt, rules)
 	if strings.TrimSpace(input.Session.LongTermMemory) != "" {
 		systemPrompt = appendMemorySummary(systemPrompt, input.Session.LongTermMemory)
 	}

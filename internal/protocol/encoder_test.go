@@ -19,6 +19,7 @@ func TestEncoderMapsAgentEventsToVersionOneProtocol(t *testing.T) {
 		assert    func(*testing.T, map[string]any)
 	}{
 		{name: "thinking started", event: agent.ThinkingStartEvent{}, eventType: "thinking_started"},
+		{name: "run phase", event: agent.RunPhaseEvent{Phase: agent.PhaseImplement, Previous: agent.PhaseExplore, Reason: agent.PhaseReasonWriteTool}, eventType: "run_phase_changed", assert: assertString("phase", "implement")},
 		{name: "thinking delta", event: agent.ThinkingEvent{Text: "reason"}, eventType: "thinking_delta", assert: assertString("text", "reason")},
 		{name: "text delta", event: agent.TextEvent{Text: "answer"}, eventType: "text_delta", assert: assertString("text", "answer")},
 		{name: "tool call started", event: agent.ToolCallStartEvent{ToolUseID: "tool-1", ToolName: "read_file"}, eventType: "tool_call_started", assert: assertString("tool_name", "read_file")},

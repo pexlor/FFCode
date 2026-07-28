@@ -84,6 +84,28 @@ func TestContextManagerInjectsMemorySummaryWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestContextManagerUsesRuntimeSystemPrompt(t *testing.T) {
+	manager, err := NewContextManager(ContextManagerConfig{
+		Store: fakeConversationStore{}, Estimator: ConservativeEstimator{},
+		Model:     ModelContextSpec{ModelName: "test", ContextWindow: 10000, MaxOutputTokens: 1000},
+		Policy:    DefaultPolicy(),
+		Workspace: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &conversation.Session{ID: "session-1", SystemPrompt: "base", LongTermMemory: "remember rg"}
+	view, err := manager.Build(context.Background(), BuildInput{
+		Session: session, SystemPrompt: "base\n\n# Run phase\nfinalize", CurrentRequest: "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(view.SystemPrompt, "# Run phase\nfinalize") || !strings.Contains(view.SystemPrompt, "remember rg") {
+		t.Fatalf("runtime prompt or memory missing: %q", view.SystemPrompt)
+	}
+}
+
 func TestMessageConversionPreservesThinkingBlocks(t *testing.T) {
 	message := conversation.Message{
 		Role:           conversation.ASSISTANT,

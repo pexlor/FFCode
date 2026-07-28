@@ -38,6 +38,12 @@ type ThinkingEvent struct {
 // UI can still show that the conversation is making progress.
 type ThinkingStartEvent struct{}
 
+type RunPhaseEvent struct {
+	Phase    RunPhase
+	Previous RunPhase
+	Reason   PhaseReason
+}
+
 type ToolCallStartEvent struct {
 	ToolUseID string
 	ToolName  string
@@ -91,6 +97,7 @@ type ErrorEvent struct {
 func (TextEvent) agentEvent()               {}
 func (ThinkingEvent) agentEvent()           {}
 func (ThinkingStartEvent) agentEvent()      {}
+func (RunPhaseEvent) agentEvent()           {}
 func (ToolCallStartEvent) agentEvent()      {}
 func (ToolCallDeltaEvent) agentEvent()      {}
 func (ToolCallCompleteEvent) agentEvent()   {}
