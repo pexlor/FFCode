@@ -35,6 +35,8 @@ func (e *Encoder) EncodeAgentEvent(sessionID, turnID string, event agent.AgentEv
 		eventType, data = "run_phase_changed", runPhaseData{Phase: string(item.Phase), Previous: string(item.Previous), Reason: string(item.Reason)}
 	case agent.ProviderRetryEvent:
 		eventType, data = "provider_retry", providerRetryData{Attempt: item.Attempt, DelayMS: item.Delay.Milliseconds(), Provider: item.Provider, ErrorType: item.ErrorType}
+	case agent.ProgressEvent:
+		eventType, data = "progress", progressData{Kind: string(item.Kind), Repetition: item.Repetition, ToolUseID: item.ToolUseID, Message: item.Message}
 	case agent.ThinkingEvent:
 		eventType, data = "thinking_delta", textData{Text: item.Text}
 	case agent.ToolCallStartEvent:

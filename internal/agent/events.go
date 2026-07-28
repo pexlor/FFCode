@@ -26,6 +26,7 @@ const (
 	StopDeadlineExceeded StopReason = "deadline_exceeded"
 	StopProviderError    StopReason = "provider_error"
 	StopBudgetExceeded   StopReason = "budget_exhausted"
+	StopNoProgress       StopReason = "no_progress"
 	StopAgentError       StopReason = "agent_error"
 )
 
@@ -53,6 +54,13 @@ type ProviderRetryEvent struct {
 	Delay     time.Duration
 	Provider  string
 	ErrorType string
+}
+
+type ProgressEvent struct {
+	Kind       ProgressKind
+	Repetition int
+	ToolUseID  string
+	Message    string
 }
 
 type ToolCallStartEvent struct {
@@ -110,6 +118,7 @@ func (ThinkingEvent) agentEvent()           {}
 func (ThinkingStartEvent) agentEvent()      {}
 func (RunPhaseEvent) agentEvent()           {}
 func (ProviderRetryEvent) agentEvent()      {}
+func (ProgressEvent) agentEvent()           {}
 func (ToolCallStartEvent) agentEvent()      {}
 func (ToolCallDeltaEvent) agentEvent()      {}
 func (ToolCallCompleteEvent) agentEvent()   {}

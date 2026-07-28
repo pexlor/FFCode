@@ -24,6 +24,7 @@ const (
 	PhaseReasonVerificationTool     PhaseReason = "verification_tool"
 	PhaseReasonVerificationComplete PhaseReason = "verification_complete"
 	PhaseReasonSoftBudget           PhaseReason = "soft_budget"
+	PhaseReasonNoProgress           PhaseReason = "no_progress"
 )
 
 const softBudgetRatio = 0.75

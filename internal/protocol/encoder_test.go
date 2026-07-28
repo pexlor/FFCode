@@ -22,6 +22,7 @@ func TestEncoderMapsAgentEventsToVersionOneProtocol(t *testing.T) {
 		{name: "thinking started", event: agent.ThinkingStartEvent{}, eventType: "thinking_started"},
 		{name: "run phase", event: agent.RunPhaseEvent{Phase: agent.PhaseImplement, Previous: agent.PhaseExplore, Reason: agent.PhaseReasonWriteTool}, eventType: "run_phase_changed", assert: assertString("phase", "implement")},
 		{name: "provider retry", event: agent.ProviderRetryEvent{Attempt: 2, Delay: time.Second, Provider: "test", ErrorType: "overloaded"}, eventType: "provider_retry", assert: assertString("provider", "test")},
+		{name: "progress", event: agent.ProgressEvent{Kind: agent.ProgressToolBlocked, Repetition: 3, ToolUseID: "tool-1", Message: "blocked"}, eventType: "progress", assert: assertString("kind", "tool_blocked")},
 		{name: "thinking delta", event: agent.ThinkingEvent{Text: "reason"}, eventType: "thinking_delta", assert: assertString("text", "reason")},
 		{name: "text delta", event: agent.TextEvent{Text: "answer"}, eventType: "text_delta", assert: assertString("text", "answer")},
 		{name: "tool call started", event: agent.ToolCallStartEvent{ToolUseID: "tool-1", ToolName: "read_file"}, eventType: "tool_call_started", assert: assertString("tool_name", "read_file")},

@@ -28,6 +28,13 @@ type providerRetryData struct {
 	ErrorType string `json:"error_type,omitempty"`
 }
 
+type progressData struct {
+	Kind       string `json:"kind"`
+	Repetition int    `json:"repetition"`
+	ToolUseID  string `json:"tool_use_id,omitempty"`
+	Message    string `json:"message"`
+}
+
 type toolData struct {
 	ToolUseID string         `json:"tool_use_id"`
 	ToolName  string         `json:"tool_name,omitempty"`

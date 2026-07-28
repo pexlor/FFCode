@@ -16,14 +16,16 @@ import (
 const DefaultMaxIterations = 800
 
 type Agent struct {
-	ctx                 context.Context
-	client              llm.LLMClient
-	toolManager         *tool.ToolsManager
-	contextManager      *contextmanager.ContextManager
-	skillManager        *skill.Manager
-	MaxIterations       int
-	RunBudget           RunBudget
-	ProviderRetryPolicy llm.RetryPolicy
+	ctx                   context.Context
+	client                llm.LLMClient
+	toolManager           *tool.ToolsManager
+	contextManager        *contextmanager.ContextManager
+	skillManager          *skill.Manager
+	MaxIterations         int
+	RunBudget             RunBudget
+	ProviderRetryPolicy   llm.RetryPolicy
+	ProgressPolicy        ProgressPolicy
+	ProgressFingerprinter ProgressFingerprinter
 }
 
 func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.ToolsManager) (*Agent, error) {
@@ -37,12 +39,14 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 		toolManager = tool.NewToolsManager()
 	}
 	return &Agent{
-		ctx:                 ctx,
-		client:              client,
-		toolManager:         toolManager,
-		MaxIterations:       DefaultMaxIterations,
-		RunBudget:           DefaultRunBudget(),
-		ProviderRetryPolicy: llm.DefaultRetryPolicy(),
+		ctx:                   ctx,
+		client:                client,
+		toolManager:           toolManager,
+		MaxIterations:         DefaultMaxIterations,
+		RunBudget:             DefaultRunBudget(),
+		ProviderRetryPolicy:   llm.DefaultRetryPolicy(),
+		ProgressPolicy:        DefaultProgressPolicy(),
+		ProgressFingerprinter: gitProgressFingerprinter{},
 	}, nil
 }
 
@@ -104,6 +108,11 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 		ctx, cancel := budgetState.context(ctx)
 		defer cancel()
 		phaseController := newRunPhaseController()
+		progressTracker := newProgressTracker(a.ProgressPolicy)
+		fingerprinter := a.ProgressFingerprinter
+		if fingerprinter == nil {
+			fingerprinter = gitProgressFingerprinter{}
+		}
 
 		if err := a.validate(session); err != nil {
 			sendTurnEndEvent(agentEventCh, turnEndFromError(err, budgetState.usage))
@@ -124,6 +133,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				toolSchemas = filterSkillTools(toolSchemas, a.skillManager.AllowedTools())
 			}
 			systemPrompt = appendSkillPrompt(systemPrompt, runPhaseGuidance(phaseController.phase()))
+			systemPrompt = appendSkillPrompt(systemPrompt, progressTracker.convergenceGuidance())
 			history := session.History
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
@@ -209,6 +219,13 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				return
 			}
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolCalls(toolCalls))
+			workspaceBefore := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
+			blockedDecisions := progressTracker.beforeTools(toolCalls, workspaceBefore)
+			blocked := make(map[string]ProgressDecision, len(blockedDecisions))
+			for _, decision := range blockedDecisions {
+				blocked[decision.ToolUseID] = decision
+				sendAgentEvent(ctx, agentEventCh, progressEvent(decision))
+			}
 
 			session.History = append(session.History, conversation.Message{
 				Role:           conversation.ASSISTANT,
@@ -217,9 +234,29 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				ToolUses:       toToolUseBlocks(toolCalls),
 			})
 
-			toolResults := a.executeTools(ctx, toolCalls, agentEventCh)
+			toolResults := a.executeToolsWithBlocked(ctx, toolCalls, blocked, agentEventCh)
 			session.AddToolResult(toolResults)
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolResults(toolCalls, phaseToolResults(toolResults)))
+
+			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
+			executedCalls, executedResults := progressInputs(toolCalls, toolResults, blocked)
+			if decision := progressTracker.observe(executedCalls, executedResults, workspaceAfter); decision.Kind != ProgressNone {
+				sendAgentEvent(ctx, agentEventCh, progressEvent(decision))
+			}
+			if len(blockedDecisions) > 0 {
+				decision := progressTracker.recordBlocked()
+				if decision.Kind != ProgressNone {
+					sendAgentEvent(ctx, agentEventCh, progressEvent(decision))
+				}
+				switch decision.Kind {
+				case ProgressFinalize:
+					emitPhaseTransition(ctx, agentEventCh, phaseController.transition(PhaseFinalize, PhaseReasonNoProgress))
+				case ProgressStop:
+					sendTurnEndEvent(agentEventCh, TurnEndEvent{Status: TurnIncomplete, StopReason: StopNoProgress, ProviderReason: string(StopNoProgress), Usage: budgetState.usage})
+					return
+				case ProgressNone, ProgressWarning, ProgressToolBlocked:
+				}
+			}
 		}
 
 		err = fmt.Errorf("agent loop exceeded max iterations %d", a.MaxIterations)
@@ -241,6 +278,23 @@ func phaseToolResults(results []conversation.ToolResultBlock) []tool.ToolResult 
 		converted[index] = tool.ToolResult{Output: result.Content, IsError: result.IsError}
 	}
 	return converted
+}
+
+func progressEvent(decision ProgressDecision) ProgressEvent {
+	return ProgressEvent{Kind: decision.Kind, Repetition: decision.Repetition, ToolUseID: decision.ToolUseID, Message: decision.Message}
+}
+
+func progressInputs(calls []llm.ToolCallComplete, results []conversation.ToolResultBlock, blocked map[string]ProgressDecision) ([]llm.ToolCallComplete, []tool.ToolResult) {
+	executedCalls := make([]llm.ToolCallComplete, 0, len(calls))
+	executedResults := make([]tool.ToolResult, 0, len(results))
+	for index, call := range calls {
+		if _, isBlocked := blocked[call.ToolID]; isBlocked || index >= len(results) {
+			continue
+		}
+		executedCalls = append(executedCalls, call)
+		executedResults = append(executedResults, tool.ToolResult{Output: results[index].Content, IsError: results[index].IsError})
+	}
+	return executedCalls, executedResults
 }
 
 func appendSkillPrompt(base string, sections ...string) string {
@@ -456,8 +510,17 @@ type completedToolCall struct {
 // returned in call order because tool-result protocols associate the response
 // sequence with the corresponding assistant tool-use sequence.
 func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, events chan<- AgentEvent) []conversation.ToolResultBlock {
+	return a.executeToolsWithBlocked(ctx, calls, nil, events)
+}
+
+func (a *Agent) executeToolsWithBlocked(ctx context.Context, calls []llm.ToolCallComplete, blocked map[string]ProgressDecision, events chan<- AgentEvent) []conversation.ToolResultBlock {
 	completed := make(chan completedToolCall, len(calls))
+	executing := 0
 	for index, call := range calls {
+		if _, isBlocked := blocked[call.ToolID]; isBlocked {
+			continue
+		}
+		executing++
 		sendAgentEvent(ctx, events, ToolExecutionStartEvent{
 			ToolUseID: call.ToolID,
 			ToolName:  call.ToolName,
@@ -469,13 +532,27 @@ func (a *Agent) executeTools(ctx context.Context, calls []llm.ToolCallComplete, 
 
 	results := make([]conversation.ToolResultBlock, len(calls))
 	for index, call := range calls {
+		if decision, isBlocked := blocked[call.ToolID]; isBlocked {
+			results[index] = conversation.ToolResultBlock{
+				ToolUseID: call.ToolID,
+				Content:   decision.Message,
+				IsError:   true,
+			}
+			sendAgentEvent(ctx, events, ToolResultEvent{
+				ToolUseID: call.ToolID,
+				ToolName:  call.ToolName,
+				Content:   decision.Message,
+				IsError:   true,
+			})
+			continue
+		}
 		results[index] = conversation.ToolResultBlock{
 			ToolUseID: call.ToolID,
 			Content:   "tool execution canceled",
 			IsError:   true,
 		}
 	}
-	for range calls {
+	for range executing {
 		var outcome completedToolCall
 		select {
 		case outcome = <-completed:
