@@ -1,10 +1,10 @@
-# MyCode（FFCode）
+# FFCode
 
 MyCode 是一个运行在终端里的开源代码 Agent。它把大语言模型（LLM）、文件与 Shell 工具、MCP（Model Context Protocol）以及权限控制组合成一个可审计、可扩展的开发工作流。
 
 它可以先阅读代码和上下文，再调用工具执行检查、修改文件、运行命令，并把会话、检查点和长期记忆持久化下来。
 
-> 当前命令行入口位于 `cmd/FFCode`，构建后的可执行文件建议命名为 `ffcode`。项目模块名仍为 `MyCode`，因此源码中会同时出现这两个名称。
+> 当前命令行入口位于 `cmd/FFCode`，构建后的可执行文件建议命名为 `ffcode`。
 
 ## 特性
 
@@ -88,7 +88,7 @@ go build -o ./bin/ffcode ./cmd/FFCode
 | `/current` | 查看当前会话信息 |
 | `/rename <标题>` | 重命名当前会话 |
 | `/delete <id>` | 删除非当前会话（需要确认） |
-| `/thinking [on\|off\|status]` | 查看或切换思考模式 |
+| `/thinking [off\|minimal\|low\|medium\|high\|xhigh\|status]` | 查看或调整思考强度（`on` 兼容为 `medium`） |
 | `/clear` | 清屏但保留上下文 |
 | `/exit`、`/quit` | 退出程序 |
 
@@ -113,6 +113,8 @@ model:
   name: your-model
   max_tokens: 8192
   enable_thinking: false
+  thinking_effort: medium # off/minimal/low/medium/high/xhigh
+  thinking_budget: 0       # Qwen/Anthropic 可选 token 预算
 
 summary:
   model: ""

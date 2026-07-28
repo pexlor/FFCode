@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"MyCode/internal/conversation"
 )
@@ -24,6 +25,12 @@ type AnthropicClient struct {
 	httpClient *http.Client
 	modelParm  *ModelParm
 	endpoint   string
+	mu         sync.RWMutex
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int64  `json:"budget_tokens"`
 }
 
 type anthropicRequest struct {
@@ -36,6 +43,7 @@ type anthropicRequest struct {
 	TopK        *float64           `json:"top_k,omitempty"`
 	Tools       []anthropicTool    `json:"tools,omitempty"`
 	Stream      bool               `json:"stream"`
+	Thinking    *anthropicThinking `json:"thinking,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -102,6 +110,18 @@ func buildAnthropicRequest(req *StreamRequest, parm *ModelParm) (anthropicReques
 	body := anthropicRequest{
 		Model: parm.ModelName, System: req.SystemPrompt, MaxTokens: maxTokens, Stream: true,
 	}
+	effort := parm.ThinkingEffort
+	if effort == "" && parm.EnableThinking {
+		effort = ThinkingEffortMedium
+	}
+	if effort != ThinkingEffortOff && effort != "" {
+		budget := parm.ThinkingBudget
+		if budget == 0 {
+			budget = defaultThinkingBudget(effort)
+		}
+		body.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
+		body.MaxTokens += budget
+	}
 	if parm.Temp != 0 {
 		body.Temperature = &parm.Temp
 	}
@@ -156,6 +176,43 @@ func buildAnthropicRequest(req *StreamRequest, parm *ModelParm) (anthropicReques
 	return body, nil
 }
 
+func defaultThinkingBudget(effort ThinkingEffort) int64 {
+	switch effort {
+	case ThinkingEffortMinimal:
+		return 1024
+	case ThinkingEffortLow:
+		return 4096
+	case ThinkingEffortHigh:
+		return 16384
+	case ThinkingEffortXHigh:
+		return 32768
+	default:
+		return 8192
+	}
+}
+
+func (c *AnthropicClient) SetThinkingEnabled(enabled bool) {
+	if enabled {
+		c.SetThinkingEffort(ThinkingEffortMedium)
+	} else {
+		c.SetThinkingEffort(ThinkingEffortOff)
+	}
+}
+
+func (c *AnthropicClient) ThinkingEnabled() bool { return c.ThinkingEffort() != ThinkingEffortOff }
+
+func (c *AnthropicClient) SetThinkingEffort(effort ThinkingEffort) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.modelParm.ThinkingEffort = effort
+}
+
+func (c *AnthropicClient) ThinkingEffort() ThinkingEffort {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.modelParm.ThinkingEffort
+}
+
 func (c *AnthropicClient) Stream(req *StreamRequest) (<-chan StreamEvent, <-chan error) {
 	events := make(chan StreamEvent, 128)
 	errs := make(chan error, 1)
@@ -168,7 +225,10 @@ func (c *AnthropicClient) Stream(req *StreamRequest) (<-chan StreamEvent, <-chan
 	go func() {
 		defer close(events)
 		defer close(errs)
-		body, err := buildAnthropicRequest(req, c.modelParm)
+		c.mu.RLock()
+		parm := *c.modelParm
+		c.mu.RUnlock()
+		body, err := buildAnthropicRequest(req, &parm)
 		if err != nil {
 			errs <- err
 			return

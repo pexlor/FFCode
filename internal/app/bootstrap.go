@@ -192,5 +192,7 @@ func modelParameters(model appconfig.ModelConfig) *llm.ModelParm {
 		ModelName:      model.Name,
 		MaxToken:       int64(model.MaxTokens),
 		EnableThinking: model.EnableThinking,
+		ThinkingEffort: llm.ThinkingEffort(model.ThinkingEffort),
+		ThinkingBudget: model.ThinkingBudget,
 	}
 }

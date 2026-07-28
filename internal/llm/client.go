@@ -5,7 +5,29 @@ import (
 	"MyCode/internal/tool"
 	"context"
 	"fmt"
+	"strings"
 )
+
+type ThinkingEffort string
+
+const (
+	ThinkingEffortOff     ThinkingEffort = "off"
+	ThinkingEffortMinimal ThinkingEffort = "minimal"
+	ThinkingEffortLow     ThinkingEffort = "low"
+	ThinkingEffortMedium  ThinkingEffort = "medium"
+	ThinkingEffortHigh    ThinkingEffort = "high"
+	ThinkingEffortXHigh   ThinkingEffort = "xhigh"
+)
+
+func ParseThinkingEffort(value string) (ThinkingEffort, error) {
+	effort := ThinkingEffort(strings.ToLower(strings.TrimSpace(value)))
+	switch effort {
+	case ThinkingEffortOff, ThinkingEffortMinimal, ThinkingEffortLow, ThinkingEffortMedium, ThinkingEffortHigh, ThinkingEffortXHigh:
+		return effort, nil
+	default:
+		return "", fmt.Errorf("invalid thinking effort %q", value)
+	}
+}
 
 type ToolCall struct {
 	ID        string
@@ -31,6 +53,11 @@ type ThinkingModeController interface {
 	ThinkingEnabled() bool
 }
 
+type ThinkingEffortController interface {
+	SetThinkingEffort(effort ThinkingEffort)
+	ThinkingEffort() ThinkingEffort
+}
+
 // 对话模型参数
 type ModelParm struct {
 	Protocol  string
@@ -45,6 +72,8 @@ type ModelParm struct {
 	Temp float64
 
 	EnableThinking bool
+	ThinkingEffort ThinkingEffort
+	ThinkingBudget int64
 
 	MaxToken      int64
 	ContextWindow int64

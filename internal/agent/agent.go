@@ -100,6 +100,27 @@ func (a *Agent) ThinkingEnabled() (bool, error) {
 	return controller.ThinkingEnabled(), nil
 }
 
+func (a *Agent) SetThinkingEffort(value string) error {
+	effort, err := llm.ParseThinkingEffort(value)
+	if err != nil {
+		return err
+	}
+	controller, ok := a.client.(llm.ThinkingEffortController)
+	if !ok {
+		return errors.New("the configured model protocol does not support thinking effort")
+	}
+	controller.SetThinkingEffort(effort)
+	return nil
+}
+
+func (a *Agent) ThinkingEffort() (string, error) {
+	controller, ok := a.client.(llm.ThinkingEffortController)
+	if !ok {
+		return "", errors.New("the configured model protocol does not support thinking effort")
+	}
+	return string(controller.ThinkingEffort()), nil
+}
+
 // Run executes the agent loop and emits events for upper-layer UI.
 func (a *Agent) Run(session *conversation.Session) <-chan AgentEvent {
 	return a.RunContext(agentContext(a), session)

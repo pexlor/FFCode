@@ -77,3 +77,42 @@ func TestAnthropicRequestPreservesThinkingSignature(t *testing.T) {
 		t.Fatalf("thinking block = %#v", thinking)
 	}
 }
+
+func TestAnthropicRequestMapsThinkingEffortToBudget(t *testing.T) {
+	request, err := buildAnthropicRequest(&StreamRequest{Context: context.Background()}, &ModelParm{
+		ModelName: "test", ThinkingEffort: ThinkingEffortHigh,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Thinking == nil || request.Thinking.Type != "enabled" || request.Thinking.BudgetTokens != 16384 {
+		t.Fatalf("thinking = %+v", request.Thinking)
+	}
+	if request.MaxTokens != 16384+defaultAnthropicMaxTokens {
+		t.Fatalf("max tokens = %d", request.MaxTokens)
+	}
+}
+
+func TestAnthropicRequestUsesExplicitThinkingBudget(t *testing.T) {
+	request, err := buildAnthropicRequest(&StreamRequest{Context: context.Background()}, &ModelParm{
+		ModelName: "test", ThinkingEffort: ThinkingEffortLow, ThinkingBudget: 6000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Thinking == nil || request.Thinking.BudgetTokens != 6000 {
+		t.Fatalf("thinking = %+v", request.Thinking)
+	}
+}
+
+func TestAnthropicRequestLegacyEnableThinkingUsesMedium(t *testing.T) {
+	request, err := buildAnthropicRequest(&StreamRequest{Context: context.Background()}, &ModelParm{
+		ModelName: "test", EnableThinking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Thinking == nil || request.Thinking.BudgetTokens != 8192 {
+		t.Fatalf("thinking = %+v", request.Thinking)
+	}
+}

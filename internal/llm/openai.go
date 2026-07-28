@@ -16,9 +16,10 @@ import (
 const openaiStreamIdleTimeout = 5 * time.Minute
 
 type OpenAiCompatClient struct {
-	client    openai.Client
-	modelParm *ModelParm
-	mu        sync.RWMutex
+	client       openai.Client
+	modelParm    *ModelParm
+	mu           sync.RWMutex
+	qwenThinking bool
 }
 
 func newOpenAiCompatClient(parm *ModelParm) (*OpenAiCompatClient, error) {
@@ -34,8 +35,7 @@ func newOpenAiCompatClient(parm *ModelParm) (*OpenAiCompatClient, error) {
 		option.WithMaxRetries(0),
 	)
 	return &OpenAiCompatClient{
-		client:    client,
-		modelParm: parm,
+		client: client, modelParm: parm, qwenThinking: parm.EnableThinking,
 	}, nil
 }
 
@@ -43,6 +43,27 @@ func (c *OpenAiCompatClient) SetThinkingEnabled(enabled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.modelParm.EnableThinking = enabled
+	c.qwenThinking = true
+	if enabled && c.modelParm.ThinkingEffort == ThinkingEffortOff {
+		c.modelParm.ThinkingEffort = ThinkingEffortMedium
+	} else if !enabled {
+		c.modelParm.ThinkingEffort = ThinkingEffortOff
+	}
+}
+
+func (c *OpenAiCompatClient) SetThinkingEffort(effort ThinkingEffort) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.modelParm.ThinkingEffort = effort
+	if c.qwenThinking {
+		c.modelParm.EnableThinking = effort != ThinkingEffortOff
+	}
+}
+
+func (c *OpenAiCompatClient) ThinkingEffort() ThinkingEffort {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.modelParm.ThinkingEffort
 }
 
 func (c *OpenAiCompatClient) ThinkingEnabled() bool {
@@ -91,10 +112,27 @@ func (c *OpenAiCompatClient) Stream(req *StreamRequest) (<-chan StreamEvent, <-c
 
 		// 发起请求
 		requestOptions := []option.RequestOption{}
-		if c.ThinkingEnabled() {
+		c.mu.RLock()
+		effort := c.modelParm.ThinkingEffort
+		enableThinking := c.modelParm.EnableThinking
+		thinkingBudget := c.modelParm.ThinkingBudget
+		qwenThinking := c.qwenThinking
+		c.mu.RUnlock()
+		if effort == "" && enableThinking {
+			effort = ThinkingEffortMedium
+		}
+		if !qwenThinking && effort != ThinkingEffortOff && effort != "" {
+			requestOptions = append(requestOptions, option.WithJSONSet("reasoning_effort", string(effort)))
+		}
+		if qwenThinking && effort != ThinkingEffortOff && effort != "" {
 			// enable_thinking is a Qwen/OpenAI-compatible extension. The SDK
 			// preserves it as a top-level JSON property through WithJSONSet.
 			requestOptions = append(requestOptions, option.WithJSONSet("enable_thinking", true))
+			budget := thinkingBudget
+			if budget == 0 {
+				budget = defaultThinkingBudget(effort)
+			}
+			requestOptions = append(requestOptions, option.WithJSONSet("thinking_budget", budget))
 		}
 		stream := c.client.Chat.Completions.NewStreaming(ctx, reqParams, requestOptions...)
 		defer stream.Close()

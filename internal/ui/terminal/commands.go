@@ -39,6 +39,11 @@ type ThinkingController interface {
 	ThinkingEnabled() (bool, error)
 }
 
+type ThinkingEffortController interface {
+	SetThinkingEffort(string) error
+	ThinkingEffort() (string, error)
+}
+
 type CommandResult struct {
 	Handled bool
 	Quit    bool
@@ -93,7 +98,7 @@ func NewDefaultCommandRegistry() (*CommandRegistry, error) {
 		{Name: "delete", Usage: "/delete <id>", Description: "删除非当前会话", Run: runDelete},
 		{Name: "rename", Usage: "/rename <标题>", Description: "重命名当前会话", Run: runRename},
 		{Name: "current", Usage: "/current", Description: "显示当前会话", Run: runCurrent},
-		{Name: "thinking", Usage: "/thinking [on|off|status]", Description: "查看或切换后续回复的思考模式", Run: runThinking},
+		{Name: "thinking", Usage: "/thinking [off|minimal|low|medium|high|xhigh|status]", Description: "查看或调整后续回复的思考强度", Run: runThinking},
 		{Name: "clear", Usage: "/clear", Description: "清理屏幕但保留上下文", Run: runClear},
 		{Name: "exit", Usage: "/exit", Description: "退出 MyCode", Run: func(context.Context, *CommandContext, string) CommandResult { return CommandResult{Quit: true} }},
 		{Name: "quit", Usage: "/quit", Description: "退出 MyCode", Run: func(context.Context, *CommandContext, string) CommandResult { return CommandResult{Quit: true} }},
@@ -235,6 +240,14 @@ func runThinking(_ context.Context, commandContext *CommandContext, arguments st
 	}
 	mode := strings.ToLower(strings.TrimSpace(arguments))
 	if mode == "" || mode == "status" {
+		if controller, ok := commandContext.Thinking.(ThinkingEffortController); ok {
+			effort, err := controller.ThinkingEffort()
+			if err != nil {
+				return CommandResult{Err: err}
+			}
+			fmt.Fprintf(commandContext.Out, "thinking: %s\n", effort)
+			return CommandResult{}
+		}
 		enabled, err := commandContext.Thinking.ThinkingEnabled()
 		if err != nil {
 			return CommandResult{Err: err}
@@ -244,6 +257,21 @@ func runThinking(_ context.Context, commandContext *CommandContext, arguments st
 			state = "on"
 		}
 		fmt.Fprintf(commandContext.Out, "thinking: %s\n", state)
+		return CommandResult{}
+	}
+	if controller, ok := commandContext.Thinking.(ThinkingEffortController); ok {
+		if mode == "on" {
+			mode = "medium"
+		}
+		switch mode {
+		case "off", "minimal", "low", "medium", "high", "xhigh":
+		default:
+			return CommandResult{Err: errors.New("usage: /thinking [off|minimal|low|medium|high|xhigh|status]")}
+		}
+		if err := controller.SetThinkingEffort(mode); err != nil {
+			return CommandResult{Err: err}
+		}
+		fmt.Fprintf(commandContext.Out, "thinking: %s (applies to subsequent requests)\n", mode)
 		return CommandResult{}
 	}
 	var enabled bool

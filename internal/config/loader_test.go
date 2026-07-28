@@ -3,8 +3,49 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLoadFileReadsThinkingEffortAndBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`model:
+  protocol: openai-compat
+  base_url: https://example.com
+  api_key: key
+  name: model
+  thinking_effort: high
+  thinking_budget: 12000
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadFile(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model.ThinkingEffort != "high" || got.Model.ThinkingBudget != 12000 {
+		t.Fatalf("thinking config = %+v", got.Model)
+	}
+}
+
+func TestLoadFileRejectsInvalidThinkingEffort(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte(`model:
+  protocol: openai-compat
+  base_url: https://example.com
+  api_key: key
+  name: model
+  thinking_effort: extreme
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(path, nil)
+	if err == nil || !strings.Contains(err.Error(), "model.thinking_effort") {
+		t.Fatalf("error = %v", err)
+	}
+}
 
 func TestLoadFileIgnoresEnvironmentOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")

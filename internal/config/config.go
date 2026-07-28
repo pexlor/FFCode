@@ -31,7 +31,9 @@ type ModelConfig struct {
 	MaxTokens int    `yaml:"max_tokens"`
 	// EnableThinking is passed to providers that support a non-standard
 	// enable_thinking request field (for example, Qwen OpenAI-compatible APIs).
-	EnableThinking bool `yaml:"enable_thinking"`
+	EnableThinking bool   `yaml:"enable_thinking"`
+	ThinkingEffort string `yaml:"thinking_effort"`
+	ThinkingBudget int64  `yaml:"thinking_budget"`
 }
 
 type SummaryConfig struct {
@@ -59,6 +61,13 @@ type MemoryConfig struct {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Model.ThinkingEffort == "" {
+		if c.Model.EnableThinking {
+			c.Model.ThinkingEffort = "medium"
+		} else {
+			c.Model.ThinkingEffort = "off"
+		}
+	}
 	if c.Context.Window == 0 {
 		c.Context.Window = DefaultContextWindow
 	}
@@ -102,6 +111,14 @@ func (c Config) validate() error {
 	}
 	if c.Model.MaxTokens < 0 {
 		return fmt.Errorf("model.max_tokens must be non-negative")
+	}
+	switch c.Model.ThinkingEffort {
+	case "off", "minimal", "low", "medium", "high", "xhigh":
+	default:
+		return fmt.Errorf("model.thinking_effort must be one of off, minimal, low, medium, high, xhigh; got %q", c.Model.ThinkingEffort)
+	}
+	if c.Model.ThinkingBudget < 0 {
+		return fmt.Errorf("model.thinking_budget must be non-negative")
 	}
 	if c.Context.Window <= 0 {
 		return fmt.Errorf("context.window must be positive")
