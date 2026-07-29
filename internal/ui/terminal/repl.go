@@ -195,6 +195,14 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 	case agent.SubagentStopEvent:
 		renderer.clearStatus()
 		fmt.Fprintf(renderer.statusOut, "%ssubagent %s: %s%s\n", colorDim, ev.SubagentID, ev.Status, colorReset)
+	case agent.QualityWarningEvent:
+		renderer.clearStatus()
+		renderer.finishThinking()
+		renderer.renderAssistantMarkdown()
+		fmt.Fprintf(renderer.statusOut, "%s%sQuality warning %s:%s %s\n", colorCyan, colorBold, ev.Code, colorReset, ev.Message)
+		for _, evidence := range ev.Evidence {
+			fmt.Fprintf(renderer.statusOut, "%s  - %s%s\n", colorDim, evidence, colorReset)
+		}
 	case agent.TurnEndEvent:
 		renderer.clearStatus()
 		renderer.finishThinking()

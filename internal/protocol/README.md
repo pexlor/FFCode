@@ -59,10 +59,24 @@
 - `tool_call_started`、`tool_call_delta`、`tool_call_completed`：Tool Call 的开始、参数增量和完成。
 - `tool_execution_started`：即将执行工具。
 - `tool_result`：工具执行结果；`is_error` 表示工具是否返回错误。
+- `quality_warning`：证据不足时产生的非阻断质量告警。
 - `turn_finished`：Turn 的唯一终止事件，包含状态、停止原因和 Token Usage。
 
 `turn_finished.data.status` 的取值为 `completed`、`incomplete`、`failed` 或 `cancelled`。
 发生错误时，数据中会包含 `error.message`；协议不会暴露 Go 的错误类型或堆栈信息。
+
+`quality_warning.data` 的结构如下：
+
+```json
+{
+  "code": "QG001",
+  "severity": "warning",
+  "message": "source changes were not verified after the patch",
+  "evidence": ["internal/agent/agent.go"]
+}
+```
+
+质量告警不会改变后续 `turn_finished` 的 `status` 或 `stop_reason`。协议版本保持为 `1`；消费者应按 `type` 选择需要处理的事件，并忽略未知的非终止事件。
 
 ## 编码器 API
 
@@ -81,8 +95,8 @@ encoder.EncodeAgentEvent(sessionID, turnID, event)
 JSONL Runner 对每个非空输入行按以下顺序处理：
 
 1. 发出 `turn_started`。
-2. 编码 Agent 产生的所有事件。
-3. 等待并编码 `turn_finished` 后再读取下一行输入。
+2. 编码 Agent 产生的所有非终止事件；质量告警在本阶段输出。
+3. 等待并编码唯一的 `turn_finished` 后再读取下一行输入。
 
 如果 Agent 事件流在终止事件前关闭，Runner 会生成一个 `status=failed`、
 `stop_reason=agent_error` 的终止事件。

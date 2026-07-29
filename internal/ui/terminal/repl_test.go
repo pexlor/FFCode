@@ -57,6 +57,25 @@ func TestTurnEndEventReturnsTerminalFailure(t *testing.T) {
 	}
 }
 
+func TestQualityWarningRendersWithoutFailingTurn(t *testing.T) {
+	var status bytes.Buffer
+	renderer := newAgentEventRenderer(&status, &bytes.Buffer{})
+
+	if err := renderer.render(agent.QualityWarningEvent{
+		Code: "QG001", Severity: agent.WarningSeverityWarning,
+		Message:  "source changes were not verified",
+		Evidence: []string{"internal/agent/agent.go"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plain := ansiSequence.ReplaceAllString(status.String(), "")
+	if !strings.Contains(plain, "Quality warning QG001:") ||
+		!strings.Contains(plain, "source changes were not verified") ||
+		!strings.Contains(plain, "internal/agent/agent.go") {
+		t.Fatalf("status = %q", plain)
+	}
+}
+
 func TestSubagentEventsRenderCompactLifecycleOnly(t *testing.T) {
 	var status bytes.Buffer
 	renderer := newAgentEventRenderer(&status, &bytes.Buffer{})
