@@ -99,6 +99,39 @@ func TestRunContinuesAfterFailedTurn(t *testing.T) {
 	}
 }
 
+func TestRunEncodesQualityWarningBeforeCompletedTerminalEvent(t *testing.T) {
+	sessions := newFakeSessions()
+	runner := &fakeTurnRunner{responses: [][]agent.AgentEvent{{
+		agent.QualityWarningEvent{
+			Code: "QG001", Severity: agent.WarningSeverityWarning,
+			Message: "source changes were not verified", Evidence: []string{"internal/agent/agent.go"},
+		},
+		agent.TurnEndEvent{Status: agent.TurnCompleted, StopReason: agent.StopEndTurn},
+	}}}
+	var output bytes.Buffer
+
+	if err := Run(context.Background(), Runtime{
+		In: strings.NewReader("request\n"), Out: &output,
+		Runner: runner, Sessions: sessions,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	events := decodeLines(t, output.String())
+	wantTypes := []string{"turn_started", "quality_warning", "turn_finished"}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("events = %#v", events)
+	}
+	for index, want := range wantTypes {
+		if events[index].Type != want {
+			t.Fatalf("event %d type = %q, want %q", index, events[index].Type, want)
+		}
+	}
+	if events[2].Data["status"] != "completed" || events[2].Data["stop_reason"] != "end_turn" {
+		t.Fatalf("terminal data = %#v", events[2].Data)
+	}
+}
+
 func TestRunSynthesizesFailureWhenAgentClosesWithoutTerminalEvent(t *testing.T) {
 	sessions := newFakeSessions()
 	runner := &fakeTurnRunner{responses: [][]agent.AgentEvent{{agent.TextEvent{Text: "partial"}}}}

@@ -46,6 +46,11 @@ func agentEventData(event agent.AgentEvent) (string, any, error) {
 		eventType, data = "provider_retry", providerRetryData{Attempt: item.Attempt, DelayMS: item.Delay.Milliseconds(), Provider: item.Provider, ErrorType: item.ErrorType}
 	case agent.ProgressEvent:
 		eventType, data = "progress", progressData{Kind: string(item.Kind), Repetition: item.Repetition, ToolUseID: item.ToolUseID, Message: item.Message}
+	case agent.QualityWarningEvent:
+		eventType, data = "quality_warning", qualityWarningData{
+			Code: item.Code, Severity: string(item.Severity), Message: item.Message,
+			Evidence: append([]string(nil), item.Evidence...),
+		}
 	case agent.ThinkingEvent:
 		eventType, data = "thinking_delta", textData{Text: item.Text}
 	case agent.ToolCallStartEvent:

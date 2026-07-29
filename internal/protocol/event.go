@@ -35,6 +35,13 @@ type progressData struct {
 	Message    string `json:"message"`
 }
 
+type qualityWarningData struct {
+	Code     string   `json:"code"`
+	Severity string   `json:"severity"`
+	Message  string   `json:"message"`
+	Evidence []string `json:"evidence,omitempty"`
+}
+
 type toolData struct {
 	ToolUseID string         `json:"tool_use_id"`
 	ToolName  string         `json:"tool_name,omitempty"`
