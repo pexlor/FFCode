@@ -64,6 +64,53 @@ func (fakeConversationStore) ActiveSummary(context.Context, string) (*SummarySna
 }
 func (fakeConversationStore) CommitSummary(context.Context, SummarySnapshot, int) error { return nil }
 
+type countingConversationStore struct {
+	fakeConversationStore
+	activeSummaryCalls int
+	listMessageCalls   int
+}
+
+func (s *countingConversationStore) ListMessages(ctx context.Context, sessionID string) ([]StoredMessage, error) {
+	s.listMessageCalls++
+	return s.fakeConversationStore.ListMessages(ctx, sessionID)
+}
+
+func (s *countingConversationStore) ActiveSummary(ctx context.Context, sessionID string) (*SummarySnapshot, error) {
+	s.activeSummaryCalls++
+	return s.fakeConversationStore.ActiveSummary(ctx, sessionID)
+}
+
+func TestContextManagerIncrementallyUpdatesCachedView(t *testing.T) {
+	store := &countingConversationStore{}
+	manager, err := NewContextManager(ContextManagerConfig{
+		Store: store, Estimator: ConservativeEstimator{},
+		Model:  ModelContextSpec{ModelName: "test", ContextWindow: 10000, MaxOutputTokens: 1000},
+		Policy: DefaultPolicy(), Workspace: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversationContext := &ConversationContext{
+		SessionID: "session-cache", SystemPrompt: "system",
+		History: []conversation.Message{{Role: conversation.USER, Content: "first"}},
+	}
+	first, err := manager.Build(context.Background(), BuildInput{Context: conversationContext, CurrentRequest: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversationContext.History = append(conversationContext.History, conversation.Message{Role: conversation.ASSISTANT, Content: "second"})
+	second, err := manager.Build(context.Background(), BuildInput{Context: conversationContext, CurrentRequest: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.activeSummaryCalls != 1 || store.listMessageCalls != 2 {
+		t.Fatalf("durable context was rebuilt: summaries=%d messages=%d", store.activeSummaryCalls, store.listMessageCalls)
+	}
+	if len(second.Messages) != len(first.Messages)+1 || second.Messages[len(second.Messages)-1].Content != "second" {
+		t.Fatalf("incremental view = %#v", second.Messages)
+	}
+}
+
 func TestContextManagerInjectsMemorySummaryWhenEnabled(t *testing.T) {
 	manager, err := NewContextManager(ContextManagerConfig{
 		Store: fakeConversationStore{}, Estimator: ConservativeEstimator{},

@@ -81,6 +81,17 @@ type ContextManager struct {
 	syncedCount map[string]int
 	turnCount   map[string]int
 	calibration map[string]tokenCalibration
+	views       map[string]cachedView
+}
+
+// cachedView keeps the durable portion of a model context in process. New
+// session messages are appended to it instead of reloading and rebuilding the
+// complete view for every tool-loop iteration.
+type cachedView struct {
+	view             *ContextView
+	historyCount     int
+	managedSuffix    string
+	availableToolKey string
 }
 
 // tokenCalibration 记录同一会话最近一次真实发送给模型的上下文用量。下一次
@@ -109,6 +120,7 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 		syncedCount: make(map[string]int),
 		turnCount:   make(map[string]int),
 		calibration: make(map[string]tokenCalibration),
+		views:       make(map[string]cachedView),
 	}
 	manager.offloader = ResultOffloader{
 		Store: config.Store, Estimator: config.Estimator, Model: config.Model.ModelName,
@@ -152,6 +164,9 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 			return nil, err
 		}
 	}
+	if view, ok := m.updateCachedView(input); ok {
+		return view, nil
+	}
 	// active summary 与覆盖游标共同构成持久化压缩检查点。
 	active, err := m.store.ActiveSummary(ctx, input.Context.SessionID)
 	if err != nil {
@@ -189,6 +204,7 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	if strings.TrimSpace(systemPrompt) == "" {
 		systemPrompt = input.Context.SystemPrompt
 	}
+	baseSystemPrompt := systemPrompt
 	systemPrompt = appendRules(systemPrompt, rules)
 	if strings.TrimSpace(input.Context.LongTermMemory) != "" {
 		systemPrompt = appendMemorySummary(systemPrompt, input.Context.LongTermMemory)
@@ -225,7 +241,100 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	if view.EstimatedTokens > m.budget.HardInputLimit {
 		return nil, fmt.Errorf("%w: estimated %d tokens, hard limit %d", ErrContextBudgetExceeded, view.EstimatedTokens, m.budget.HardInputLimit)
 	}
+	m.rememberView(input, view, baseSystemPrompt)
 	return view, nil
+}
+
+// updateCachedView applies only the messages added since the preceding Build.
+// It deliberately falls back to the full durable path when an old context is
+// resumed, the tool catalog changes, or the incremental view reaches the
+// compaction threshold.
+func (m *ContextManager) updateCachedView(input BuildInput) (*ContextView, bool) {
+	basePrompt := input.SystemPrompt
+	if strings.TrimSpace(basePrompt) == "" {
+		basePrompt = input.Context.SystemPrompt
+	}
+	toolKey := toolSchemasKey(input.AvailableTools)
+	m.mu.Lock()
+	cached, ok := m.views[input.Context.SessionID]
+	m.mu.Unlock()
+	if !ok || cached.view == nil || cached.historyCount > len(input.Context.History) || cached.availableToolKey != toolKey {
+		return nil, false
+	}
+
+	view := cloneContextView(cached.view)
+	view.SystemPrompt = basePrompt + cached.managedSuffix
+	for _, message := range input.Context.History[cached.historyCount:] {
+		view.Messages = append(view.Messages, cloneMessage(message))
+	}
+	view.rawTokens = m.estimator.EstimateText(m.model.ModelName, view.SystemPrompt) +
+		m.estimator.EstimateMessages(m.model.ModelName, view.Messages) +
+		m.estimator.EstimateTools(m.model.ModelName, view.Tools)
+	view.EstimatedTokens = m.calibratedEstimate(input.Context.SessionID, view.rawTokens)
+	if view.EstimatedTokens >= m.budget.SoftCompactLimit || view.EstimatedTokens > m.budget.HardInputLimit {
+		return nil, false
+	}
+	m.mu.Lock()
+	m.views[input.Context.SessionID] = cachedView{
+		view: view, historyCount: len(input.Context.History), managedSuffix: cached.managedSuffix, availableToolKey: toolKey,
+	}
+	m.mu.Unlock()
+	return view, true
+}
+
+func (m *ContextManager) rememberView(input BuildInput, view *ContextView, basePrompt string) {
+	if view == nil || input.Context == nil {
+		return
+	}
+	suffix := strings.TrimPrefix(view.SystemPrompt, basePrompt)
+	m.mu.Lock()
+	m.views[input.Context.SessionID] = cachedView{
+		view: cloneContextView(view), historyCount: len(input.Context.History), managedSuffix: suffix,
+		availableToolKey: toolSchemasKey(input.AvailableTools),
+	}
+	m.mu.Unlock()
+}
+
+func cloneContextView(source *ContextView) *ContextView {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.Messages = make([]conversation.Message, len(source.Messages))
+	for index, message := range source.Messages {
+		cloned.Messages[index] = cloneMessage(message)
+	}
+	cloned.Tools = append([]*tool.ToolSchema(nil), source.Tools...)
+	cloned.AppliedLayers = append([]LayerReport(nil), source.AppliedLayers...)
+	return &cloned
+}
+
+func cloneMessage(message conversation.Message) conversation.Message {
+	cloned := message
+	cloned.ThinkingBlocks = append([]conversation.ThinkingBlock(nil), message.ThinkingBlocks...)
+	cloned.ToolResults = append([]conversation.ToolResultBlock(nil), message.ToolResults...)
+	cloned.ToolUses = make([]conversation.ToolUseBlock, len(message.ToolUses))
+	for index, use := range message.ToolUses {
+		cloned.ToolUses[index] = use
+		if use.Arguments != nil {
+			cloned.ToolUses[index].Arguments = make(map[string]any, len(use.Arguments))
+			for key, value := range use.Arguments {
+				cloned.ToolUses[index].Arguments[key] = value
+			}
+		}
+	}
+	return cloned
+}
+
+func toolSchemasKey(schemas []*tool.ToolSchema) string {
+	var builder strings.Builder
+	for _, schema := range schemas {
+		if schema != nil {
+			builder.WriteString(schema.Name)
+			builder.WriteByte('\x00')
+		}
+	}
+	return builder.String()
 }
 
 // messagesForView 根据 active checkpoint 选择原始消息读取起点。
