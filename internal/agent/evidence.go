@@ -1,6 +1,12 @@
 package agent
 
-import "sort"
+import (
+	"context"
+	"sort"
+
+	"MyCode/internal/llm"
+	"MyCode/internal/tool"
+)
 
 type ChangeKind string
 
@@ -95,4 +101,111 @@ func equalWorkspaceChanges(left, right []WorkspaceChange) bool {
 		}
 	}
 	return true
+}
+
+type runEvidenceCoordinator struct {
+	detector       ChangeDetector
+	classifier     VerificationClassifier
+	evidence       *RunEvidence
+	gate           *qualityGate
+	baseline       WorkspaceSnapshot
+	baselineLoaded bool
+}
+
+func newRunEvidenceCoordinator(detector ChangeDetector, classifier VerificationClassifier) *runEvidenceCoordinator {
+	if detector == nil {
+		detector = newGitChangeDetector(defaultDiffLimit)
+	}
+	if classifier == nil {
+		classifier = defaultVerificationClassifier{}
+	}
+	return &runEvidenceCoordinator{
+		detector: detector, classifier: classifier,
+		evidence: newRunEvidence(), gate: newQualityGate(),
+	}
+}
+
+func (c *runEvidenceCoordinator) Start(ctx context.Context, workspace string) {
+	baseline, err := c.detector.Snapshot(ctx, workspace)
+	if err != nil {
+		c.evidence.DiffAvailable = false
+		return
+	}
+	c.baseline = baseline
+	c.baselineLoaded = true
+	c.evidence.DiffAvailable = baseline.Complete
+}
+
+func (c *runEvidenceCoordinator) AfterTools(ctx context.Context, workspace string, calls []llm.ToolCallComplete, results []tool.ToolResult) phaseObservation {
+	previousRevision := c.evidence.LastChangeRevision
+	c.refresh(ctx, workspace)
+	observation := phaseObservation{
+		WorkspaceChanged: c.evidence.LastChangeRevision > previousRevision && len(c.evidence.Changes) > 0,
+	}
+	count := min(len(calls), len(results))
+	c.evidence.ToolExecutions += count
+	for index := 0; index < count; index++ {
+		scope, ok := c.classifier.Classify(calls[index])
+		if !ok {
+			continue
+		}
+		command, _ := calls[index].Arguments["command"].(string)
+		c.evidence.RecordVerification(VerificationEvidence{
+			ToolUseID: calls[index].ToolID, Command: command,
+			Scope: scope, Passed: !results[index].IsError,
+		})
+		observation.VerificationAttempted = true
+	}
+	if !c.evidence.DiffAvailable && hasExplicitWriteCall(calls[:count]) {
+		observation.WorkspaceChanged = true
+	}
+	return observation
+}
+
+func (c *runEvidenceCoordinator) BeforeFinalize(ctx context.Context, workspace string, softBudget bool) (phaseObservation, []QualityWarning) {
+	previousRevision := c.evidence.LastChangeRevision
+	c.refresh(ctx, workspace)
+	c.evidence.SoftBudgetHit = c.evidence.SoftBudgetHit || softBudget
+	c.evidence.FinalRequested = c.evidence.FinalRequested || !softBudget
+	observation := phaseObservation{
+		WorkspaceChanged: c.evidence.LastChangeRevision > previousRevision && len(c.evidence.Changes) > 0,
+		FinalRequested:   !softBudget,
+		SoftBudgetHit:    softBudget,
+	}
+	return observation, c.gate.Evaluate(*c.evidence)
+}
+
+func (c *runEvidenceCoordinator) Evidence() RunEvidence {
+	copy := *c.evidence
+	copy.Changes = cloneWorkspaceChanges(c.evidence.Changes)
+	copy.Verifications = append([]VerificationEvidence(nil), c.evidence.Verifications...)
+	return copy
+}
+
+func (c *runEvidenceCoordinator) refresh(ctx context.Context, workspace string) {
+	if !c.baselineLoaded {
+		c.evidence.DiffAvailable = false
+		return
+	}
+	current, err := c.detector.Snapshot(ctx, workspace)
+	if err != nil {
+		c.evidence.DiffAvailable = false
+		return
+	}
+	report, err := c.detector.Compare(c.baseline, current)
+	if err != nil {
+		c.evidence.DiffAvailable = false
+		return
+	}
+	c.evidence.DiffAvailable = c.evidence.DiffAvailable && report.Complete
+	c.evidence.RecordChanges(report.Changes)
+}
+
+func hasExplicitWriteCall(calls []llm.ToolCallComplete) bool {
+	for _, call := range calls {
+		if isWriteTool(call.ToolName) {
+			return true
+		}
+	}
+	return false
 }

@@ -2,9 +2,6 @@ package agent
 
 import (
 	"strings"
-
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
 )
 
 type RunPhase string
@@ -19,12 +16,13 @@ const (
 type PhaseReason string
 
 const (
-	PhaseReasonRunStarted           PhaseReason = "run_started"
-	PhaseReasonWriteTool            PhaseReason = "write_tool"
-	PhaseReasonVerificationTool     PhaseReason = "verification_tool"
-	PhaseReasonVerificationComplete PhaseReason = "verification_complete"
-	PhaseReasonSoftBudget           PhaseReason = "soft_budget"
-	PhaseReasonNoProgress           PhaseReason = "no_progress"
+	PhaseReasonRunStarted            PhaseReason = "run_started"
+	PhaseReasonWriteTool             PhaseReason = "write_tool"
+	PhaseReasonWorkspaceChanged      PhaseReason = "workspace_changed"
+	PhaseReasonVerificationAttempted PhaseReason = "verification_attempted"
+	PhaseReasonFinalRequested        PhaseReason = "final_requested"
+	PhaseReasonSoftBudget            PhaseReason = "soft_budget"
+	PhaseReasonNoProgress            PhaseReason = "no_progress"
 )
 
 const softBudgetRatio = 0.75
@@ -37,6 +35,13 @@ type phaseTransition struct {
 }
 
 type runPhaseController struct{ current RunPhase }
+
+type phaseObservation struct {
+	WorkspaceChanged      bool
+	VerificationAttempted bool
+	FinalRequested        bool
+	SoftBudgetHit         bool
+}
 
 func newRunPhaseController() *runPhaseController {
 	return &runPhaseController{current: PhaseExplore}
@@ -55,46 +60,24 @@ func (c *runPhaseController) transition(to RunPhase, reason PhaseReason) phaseTr
 
 func (c *runPhaseController) observeBudget(snapshot runBudgetSnapshot) phaseTransition {
 	if snapshot.softLimitReached(softBudgetRatio) {
+		return c.observe(phaseObservation{SoftBudgetHit: true})
+	}
+	return phaseTransition{From: c.current, To: c.current}
+}
+
+func (c *runPhaseController) observe(observation phaseObservation) phaseTransition {
+	switch {
+	case observation.SoftBudgetHit:
 		return c.transition(PhaseFinalize, PhaseReasonSoftBudget)
-	}
-	return phaseTransition{From: c.current, To: c.current}
-}
-
-func (c *runPhaseController) observeToolCalls(calls []llm.ToolCallComplete) phaseTransition {
-	if c.current == PhaseFinalize {
+	case observation.FinalRequested:
+		return c.transition(PhaseFinalize, PhaseReasonFinalRequested)
+	case observation.WorkspaceChanged:
+		return c.transition(PhaseImplement, PhaseReasonWorkspaceChanged)
+	case observation.VerificationAttempted && c.current != PhaseExplore:
+		return c.transition(PhaseVerify, PhaseReasonVerificationAttempted)
+	default:
 		return phaseTransition{From: c.current, To: c.current}
 	}
-	for _, call := range calls {
-		if isVerificationCall(call) && c.current != PhaseExplore {
-			return c.transition(PhaseVerify, PhaseReasonVerificationTool)
-		}
-	}
-	for _, call := range calls {
-		if isWriteTool(call.ToolName) {
-			return c.transition(PhaseImplement, PhaseReasonWriteTool)
-		}
-	}
-	return phaseTransition{From: c.current, To: c.current}
-}
-
-func (c *runPhaseController) observeToolResults(calls []llm.ToolCallComplete, results []tool.ToolResult) phaseTransition {
-	if c.current != PhaseVerify || len(calls) != len(results) {
-		return phaseTransition{From: c.current, To: c.current}
-	}
-	foundVerification := false
-	for index, call := range calls {
-		if !isVerificationCall(call) {
-			continue
-		}
-		foundVerification = true
-		if results[index].IsError {
-			return phaseTransition{From: c.current, To: c.current}
-		}
-	}
-	if foundVerification {
-		return c.transition(PhaseFinalize, PhaseReasonVerificationComplete)
-	}
-	return phaseTransition{From: c.current, To: c.current}
 }
 
 func runPhaseGuidance(phase RunPhase) string {
@@ -118,9 +101,4 @@ func isWriteTool(name string) bool {
 	default:
 		return false
 	}
-}
-
-func isVerificationCall(call llm.ToolCallComplete) bool {
-	_, ok := (defaultVerificationClassifier{}).Classify(call)
-	return ok
 }

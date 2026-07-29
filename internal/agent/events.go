@@ -63,6 +63,13 @@ type ProgressEvent struct {
 	Message    string
 }
 
+type QualityWarningEvent struct {
+	Code     string
+	Severity WarningSeverity
+	Message  string
+	Evidence []string
+}
+
 type ToolCallStartEvent struct {
 	ToolUseID string
 	ToolName  string
@@ -139,6 +146,7 @@ func (ThinkingStartEvent) agentEvent()      {}
 func (RunPhaseEvent) agentEvent()           {}
 func (ProviderRetryEvent) agentEvent()      {}
 func (ProgressEvent) agentEvent()           {}
+func (QualityWarningEvent) agentEvent()     {}
 func (ToolCallStartEvent) agentEvent()      {}
 func (ToolCallDeltaEvent) agentEvent()      {}
 func (ToolCallCompleteEvent) agentEvent()   {}

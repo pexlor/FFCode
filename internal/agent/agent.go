@@ -17,18 +17,20 @@ import (
 const DefaultMaxIterations = 800
 
 type Agent struct {
-	ctx                   context.Context
-	client                llm.LLMClient
-	toolManager           *tool.ToolsManager
-	contextManager        *contextmanager.ContextManager
-	skillManager          *skill.Manager
-	MaxIterations         int
-	RunBudget             RunBudget
-	ProviderRetryPolicy   llm.RetryPolicy
-	ProgressPolicy        ProgressPolicy
-	ProgressFingerprinter ProgressFingerprinter
-	CheckpointStore       CheckpointStore
-	Hooks                 *hook.Dispatcher
+	ctx                    context.Context
+	client                 llm.LLMClient
+	toolManager            *tool.ToolsManager
+	contextManager         *contextmanager.ContextManager
+	skillManager           *skill.Manager
+	MaxIterations          int
+	RunBudget              RunBudget
+	ProviderRetryPolicy    llm.RetryPolicy
+	ProgressPolicy         ProgressPolicy
+	ProgressFingerprinter  ProgressFingerprinter
+	ChangeDetector         ChangeDetector
+	VerificationClassifier VerificationClassifier
+	CheckpointStore        CheckpointStore
+	Hooks                  *hook.Dispatcher
 }
 
 func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.ToolsManager) (*Agent, error) {
@@ -42,14 +44,16 @@ func NewAgent(ctx context.Context, client llm.LLMClient, toolManager *tool.Tools
 		toolManager = tool.NewToolsManager()
 	}
 	return &Agent{
-		ctx:                   ctx,
-		client:                client,
-		toolManager:           toolManager,
-		MaxIterations:         DefaultMaxIterations,
-		RunBudget:             DefaultRunBudget(),
-		ProviderRetryPolicy:   llm.DefaultRetryPolicy(),
-		ProgressPolicy:        DefaultProgressPolicy(),
-		ProgressFingerprinter: gitProgressFingerprinter{},
+		ctx:                    ctx,
+		client:                 client,
+		toolManager:            toolManager,
+		MaxIterations:          DefaultMaxIterations,
+		RunBudget:              DefaultRunBudget(),
+		ProviderRetryPolicy:    llm.DefaultRetryPolicy(),
+		ProgressPolicy:         DefaultProgressPolicy(),
+		ProgressFingerprinter:  gitProgressFingerprinter{},
+		ChangeDetector:         newGitChangeDetector(defaultDiffLimit),
+		VerificationClassifier: defaultVerificationClassifier{},
 	}, nil
 }
 
@@ -196,6 +200,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 		defer cancel()
 		phaseController := newRunPhaseController()
 		progressTracker := newProgressTracker(a.ProgressPolicy)
+		evidenceCoordinator := newRunEvidenceCoordinator(a.ChangeDetector, a.VerificationClassifier)
 		fingerprinter := a.ProgressFingerprinter
 		if fingerprinter == nil {
 			fingerprinter = gitProgressFingerprinter{}
@@ -228,10 +233,16 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
+		evidenceCoordinator.Start(ctx, session.Workspace)
 		sendAgentEvent(ctx, agentEventCh, RunPhaseEvent{Phase: PhaseExplore, Reason: PhaseReasonRunStarted})
 
 		for iteration := 0; iteration < a.MaxIterations; iteration++ {
-			emitPhaseTransition(ctx, agentEventCh, phaseController.observeBudget(budgetState.snapshot(time.Now())))
+			budgetTransition := phaseController.observeBudget(budgetState.snapshot(time.Now()))
+			emitPhaseTransition(ctx, agentEventCh, budgetTransition)
+			if budgetTransition.Changed && budgetTransition.Reason == PhaseReasonSoftBudget {
+				_, warnings := evidenceCoordinator.BeforeFinalize(ctx, session.Workspace, true)
+				emitQualityWarnings(ctx, agentEventCh, warnings)
+			}
 			toolSchemas := a.toolManager.BuildAllSchemas()
 			systemPrompt := session.SystemPrompt
 			if a.skillManager != nil {
@@ -305,6 +316,9 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			}
 
 			if len(toolCalls) == 0 {
+				observation, warnings := evidenceCoordinator.BeforeFinalize(ctx, session.Workspace, false)
+				emitPhaseTransition(ctx, agentEventCh, phaseController.observe(observation))
+				emitQualityWarnings(ctx, agentEventCh, warnings)
 				if assistantText != "" || len(thinkingBlocks) > 0 {
 					session.History = append(session.History, conversation.Message{
 						Role:           conversation.ASSISTANT,
@@ -330,7 +344,6 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
-			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolCalls(toolCalls))
 			workspaceBefore := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
 			blockedDecisions := progressTracker.beforeTools(toolCalls, workspaceBefore)
 			blocked := make(map[string]ProgressDecision, len(blockedDecisions))
@@ -357,10 +370,11 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
-			emitPhaseTransition(ctx, agentEventCh, phaseController.observeToolResults(toolCalls, phaseToolResults(toolResults)))
-
 			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
 			executedCalls, executedResults := progressInputs(toolCalls, toolResults, blocked)
+			emitPhaseTransition(ctx, agentEventCh, phaseController.observe(
+				evidenceCoordinator.AfterTools(ctx, session.Workspace, executedCalls, executedResults),
+			))
 			if decision := progressTracker.observe(executedCalls, executedResults, workspaceAfter); decision.Kind != ProgressNone {
 				sendAgentEvent(ctx, agentEventCh, progressEvent(decision))
 			}
@@ -395,6 +409,15 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 func emitPhaseTransition(ctx context.Context, events chan<- AgentEvent, transition phaseTransition) {
 	if transition.Changed {
 		sendAgentEvent(ctx, events, RunPhaseEvent{Phase: transition.To, Previous: transition.From, Reason: transition.Reason})
+	}
+}
+
+func emitQualityWarnings(ctx context.Context, events chan<- AgentEvent, warnings []QualityWarning) {
+	for _, warning := range warnings {
+		sendAgentEvent(ctx, events, QualityWarningEvent{
+			Code: warning.Code, Severity: warning.Severity,
+			Message: warning.Message, Evidence: append([]string(nil), warning.Evidence...),
+		})
 	}
 }
 
