@@ -204,6 +204,21 @@ Skill 默认从以下目录发现，优先级为“项目级 > 用户级 > 内�
 
 这些目录可能包含代码上下文、模型输出和用户输入，建议加入项目的 `.gitignore`。权限系统可以降低误操作风险，但不能替代操作系统权限、容器隔离或对不可信 Prompt 的审查。
 
+## Benchmark 迭代记录
+
+项目使用 SWE-bench Lite 持续验证 Agent 的代码修复、任务收敛和测试回归能力。当前已完成两轮迭代；两轮都只覆盖 Lite 子集，不代表 SWE-bench Lite 全量 300-case 的官方成绩。
+
+| 迭代 | 日期 | 样本 | 严格完成 / Completed | 超时 | 非空补丁 | Evaluator 结果 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 第一轮：Runner 与收敛诊断 | 2026-07-27 | 50 | `30/50` (60.0%) | `13/50` (26.0%) | `44/50` (88.0%) | 快照时仅评测 `22/50`：14 resolved、5 unresolved、2 空补丁、1 evaluator error |
+| 第二轮：结构化协议与完整评测 | 2026-07-28 | 110 | `104/110` (94.5%) | `6/110` (5.5%) | `108/110` (98.2%) | 81 resolved、26 unresolved、2 空补丁、1 evaluator error；总体成功率 73.6% |
+
+第一轮用于定位运行链路问题。Runner 当时通过终端正文中的 `done:` 子串判断任务结束，至少造成 5 个 case 被错误截断或分类；同时，缺少收尾机制导致 13 个 case 超时，其中 10 个已经产生非空补丁。由于快照时仍有 28 个 case 未完成 Evaluator，本轮的 `14/50` 只是解决率下限，不能作为最终成绩，也不能与第二轮成功率直接比较。完整分析见 [第一轮 50-case 问题报告](./benchmark/swebench-lite-20260726/agent-problem-analysis-50-cases.md)。
+
+第二轮改用机器可读的结构化终止事件，并加入可恢复运行、并行 Evaluator 和更明确的运行预算。超时率从 26.0% 降至 5.5%，非空补丁产出率从 88.0% 提升至 98.2%。在 110 个 case 中最终解决 81 个，总体成功率为 73.6%；排除 1 个基础设施错误和 2 个空补丁后，有效评测通过率为 75.7%。26 个 unresolved 补丁均成功应用，下一阶段重点是需求边界、兼容语义、共享状态和测试 Oracle，而不是补丁格式或 Evaluator 接入。详见 [第二轮 110-case 评测报告](./benchmark/swebench-lite-20260726/mycode-swebench-lite-110-case-report-20260728.md)。
+
+Runner、任务数据和复现命令位于 [`benchmark/swebench-lite-20260726/`](./benchmark/swebench-lite-20260726/README.md)。
+
 ## 开发
 
 ```bash
@@ -237,6 +252,7 @@ internal/conversation  会话生命周期
 internal/memory        跨会话记忆
 internal/skill         Skill 发现与按需加载
 internal/ui            终端与 JSONL 交互层
+benchmark              SWE-bench Runner、任务数据与迭代报告
 docs                   架构、ADR、规格与计划
 ```
 
