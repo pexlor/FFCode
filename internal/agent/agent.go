@@ -253,6 +253,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			systemPrompt = appendSkillPrompt(systemPrompt, progressTracker.convergenceGuidance())
 			systemPrompt = appendSkillPrompt(systemPrompt, recoveryGuidance)
 			history := session.History
+			var contextView *contextmanager.ContextView
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
 				// Build 内部通过同步游标避免重复写 transcript，并通过摘要检查点避免重复压缩。
@@ -264,6 +265,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 					finish(turnEndFromError(err, budgetState.usage))
 					return
 				}
+				contextView = view
 				// 从这里开始，LLM 只接触经过预算治理的视图，不再直接接触完整 History。
 				systemPrompt = view.SystemPrompt
 				history = view.Messages
@@ -282,6 +284,11 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				})
 
 				result, err := a.collectStream(ctx, events, errs)
+				// Provider-reported input tokens become the baseline for the next
+				// ContextView; only content added after this request is estimated.
+				if a.contextManager != nil {
+					a.contextManager.RecordUsage(contextView, result.usage)
+				}
 				if budgetErr := budgetState.recordUsage(result.usage); budgetErr != nil {
 					finish(turnEndFromError(budgetErr, budgetState.usage))
 					return

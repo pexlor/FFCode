@@ -10,6 +10,7 @@ import (
 
 	"MyCode/internal/conversation"
 	"MyCode/internal/hook"
+	"MyCode/internal/llm"
 	"MyCode/internal/tool"
 )
 
@@ -27,10 +28,12 @@ type LayerReport struct {
 // ContextView 是一次请求真正发送给模型的临时视图。
 // 它可以包含摘要和 Artifact 引用，但不会反向覆盖 ConversationStore 中的原始事实。
 type ContextView struct {
+	SessionID       string
 	SystemPrompt    string
 	Messages        []conversation.Message
 	Tools           []*tool.ToolSchema
 	EstimatedTokens int
+	rawTokens       int
 	Budget          ContextBudget
 	AppliedLayers   []LayerReport
 }
@@ -74,6 +77,14 @@ type ContextManager struct {
 	mu          sync.Mutex
 	syncedCount map[string]int
 	turnCount   map[string]int
+	calibration map[string]tokenCalibration
+}
+
+// tokenCalibration 记录同一会话最近一次真实发送给模型的上下文用量。下一次
+// 构建时以 API 返回的 input token 为基线，只对新增或删减的内容使用估算器。
+type tokenCalibration struct {
+	estimatedInput int
+	actualInput    int64
 }
 
 // NewContextManager 校验模型预算并组装四级组件。
@@ -94,6 +105,7 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 		loader:      DemandLoader{Workspace: config.Workspace},
 		syncedCount: make(map[string]int),
 		turnCount:   make(map[string]int),
+		calibration: make(map[string]tokenCalibration),
 	}
 	manager.offloader = ResultOffloader{
 		Store: config.Store, Estimator: config.Estimator, Model: config.Model.ModelName,
@@ -176,7 +188,7 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 		systemPrompt = appendMemorySummary(systemPrompt, input.Session.LongTermMemory)
 	}
 	selectedTools := m.loader.SelectTools(input.CurrentRequest, activeToolNames(stored), input.AvailableTools)
-	view := m.renderView(systemPrompt, active, stored, selectedTools, reports)
+	view := m.renderView(input.Session.ID, systemPrompt, active, stored, selectedTools, reports)
 	// 第 3 层：前三层处理后仍达到软阈值，才尝试增量摘要。
 	// Compactor 内部还会检查是否存在足够的新完整 Turn，避免无意义地重复调用模型。
 	if view.EstimatedTokens >= m.budget.SoftCompactLimit {
@@ -200,7 +212,7 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 			}
 			reports = append(reports, LayerReport{Layer: "conversation_compactor", BeforeTokens: view.EstimatedTokens, Reason: "soft compact limit reached"})
 			active = &updated
-			view = m.renderView(systemPrompt, active, stored, selectedTools, reports)
+			view = m.renderView(input.Session.ID, systemPrompt, active, stored, selectedTools, reports)
 		}
 	}
 	// BudgetGuard 是发送请求前的最后防线；超过硬限制时绝不把请求交给模型。
@@ -304,7 +316,7 @@ func fromMessage(item conversation.Message, sessionID string, index, turn int) S
 }
 
 // renderView 把持久化类型转换回模型协议类型，并在最前面注入已生效的任务摘要。
-func (m *ContextManager) renderView(systemPrompt string, active *SummarySnapshot, stored []StoredMessage, tools []*tool.ToolSchema, reports []LayerReport) *ContextView {
+func (m *ContextManager) renderView(sessionID, systemPrompt string, active *SummarySnapshot, stored []StoredMessage, tools []*tool.ToolSchema, reports []LayerReport) *ContextView {
 	var messages []conversation.Message
 	if active != nil && active.Content != "" {
 		// 边界提示强调摘要不是精确原文，需要细节时必须重新读取文件或 Artifact。
@@ -324,7 +336,48 @@ func (m *ContextManager) renderView(systemPrompt string, active *SummarySnapshot
 		messages = append(messages, converted)
 	}
 	estimated := m.estimator.EstimateText(m.model.ModelName, systemPrompt) + m.estimator.EstimateMessages(m.model.ModelName, messages) + m.estimator.EstimateTools(m.model.ModelName, tools)
-	return &ContextView{SystemPrompt: systemPrompt, Messages: messages, Tools: tools, EstimatedTokens: estimated, Budget: m.budget, AppliedLayers: reports}
+	return &ContextView{SessionID: sessionID, SystemPrompt: systemPrompt, Messages: messages, Tools: tools, EstimatedTokens: m.calibratedEstimate(sessionID, estimated), rawTokens: estimated, Budget: m.budget, AppliedLayers: reports}
+}
+
+// RecordUsage feeds provider-reported input usage back into the estimator. A
+// provider can omit usage for failed or partial streams, so zero values do not
+// replace an already reliable baseline.
+func (m *ContextManager) RecordUsage(view *ContextView, usage llm.UsageInfo) {
+	if m == nil || view == nil || view.SessionID == "" || view.EstimatedTokens <= 0 || usage.InputTokens <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rawTokens := view.rawTokens
+	if rawTokens <= 0 {
+		rawTokens = view.EstimatedTokens
+	}
+	m.calibration[view.SessionID] = tokenCalibration{
+		estimatedInput: rawTokens,
+		actualInput:    usage.InputTokens,
+	}
+}
+
+func (m *ContextManager) calibratedEstimate(sessionID string, estimated int) int {
+	if sessionID == "" || estimated <= 0 {
+		return estimated
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	baseline, ok := m.calibration[sessionID]
+	if !ok {
+		return estimated
+	}
+	// 将本轮估算相对上轮的变化量叠加到上轮 API 的真实 input token 上。
+	// 这样稳定的历史部分不再反复由粗略估算器计算，只有新增文本需要估算。
+	adjusted := baseline.actualInput + int64(estimated-baseline.estimatedInput)
+	if adjusted < 0 {
+		return 0
+	}
+	if adjusted > int64(^uint(0)>>1) {
+		return int(^uint(0) >> 1)
+	}
+	return int(adjusted)
 }
 
 // activePaths 从工具参数中提取本轮真实操作过的文件路径，用于加载路径级规则。

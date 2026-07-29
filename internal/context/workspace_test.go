@@ -112,7 +112,7 @@ func TestMessageConversionPreservesThinkingBlocks(t *testing.T) {
 		ThinkingBlocks: []conversation.ThinkingBlock{{Thinking: "reasoning", Signature: "signature"}},
 	}
 	stored := fromMessage(message, "session-1", 1, 1)
-	view := (&ContextManager{estimator: ConservativeEstimator{}, model: ModelContextSpec{ModelName: "test"}}).renderView("system", nil, []StoredMessage{stored}, nil, nil)
+	view := (&ContextManager{estimator: ConservativeEstimator{}, model: ModelContextSpec{ModelName: "test"}}).renderView("session-1", "system", nil, []StoredMessage{stored}, nil, nil)
 	got := view.Messages[0].ThinkingBlocks
 	if len(got) != 1 || got[0] != message.ThinkingBlocks[0] {
 		t.Fatalf("thinking blocks = %#v", got)
