@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"MyCode/internal/agent"
+	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
 )
 
@@ -33,7 +34,7 @@ type fakeTurnRunner struct {
 	calls     int
 }
 
-func (r *fakeTurnRunner) RunContext(_ context.Context, _ *conversation.Session) <-chan agent.AgentEvent {
+func (r *fakeTurnRunner) RunContext(_ context.Context, _ *contextmanager.ConversationContext) <-chan agent.AgentEvent {
 	ch := make(chan agent.AgentEvent, 16)
 	response := r.responses[r.calls]
 	r.calls++

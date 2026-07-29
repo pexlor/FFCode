@@ -1,6 +1,7 @@
 package agent
 
 import (
+	contextmanager "MyCode/internal/context"
 	"context"
 	"errors"
 	"fmt"
@@ -15,19 +16,19 @@ var (
 	ErrSubagentHookRejected = errors.New("subagent lifecycle rejected by hook")
 )
 
-func (a *Agent) dispatchRunStartHooks(ctx context.Context, session *conversation.Session) (context.Context, error) {
+func (a *Agent) dispatchRunStartHooks(ctx context.Context, conversationContext *contextmanager.ConversationContext) (context.Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if a == nil || a.Hooks == nil || session == nil {
+	if a == nil || a.Hooks == nil || conversationContext == nil {
 		return ctx, nil
 	}
 	base, _ := hook.InputFromContext(ctx)
-	base.SessionID = session.ID
-	base.Workspace = session.Workspace
+	base.SessionID = conversationContext.SessionID
+	base.Workspace = conversationContext.Workspace
 	sessionInput := base
 	sessionInput.Reason = "agent_run"
-	lifecycleKey := session.LifecycleKey()
+	lifecycleKey := conversationContext.LifecycleKey
 	result, err := a.Hooks.DispatchOnce(ctx, hook.EventSessionStart, lifecycleKey, sessionInput)
 	if err != nil {
 		return ctx, fmt.Errorf("session_start hook: %w", err)
@@ -37,15 +38,15 @@ func (a *Agent) dispatchRunStartHooks(ctx context.Context, session *conversation
 		return ctx, fmt.Errorf("%w: session_start: %s", ErrHookRejected, lifecycleHookReason(result.Reason))
 	}
 
-	index, ordinal := latestUserMessage(session.History)
+	index, ordinal := latestUserMessage(conversationContext.History)
 	if index < 0 {
 		return hook.WithInput(ctx, base), nil
 	}
-	prompt := session.History[index].Content
+	prompt := conversationContext.History[index].Content
 	promptInput := base
 	promptInput.UserPrompt = prompt
 	promptInput.Prompt = prompt
-	promptKey := fmt.Sprintf("%s:%d", session.ID, ordinal)
+	promptKey := fmt.Sprintf("%s:%d", conversationContext.SessionID, ordinal)
 	result, err = a.Hooks.DispatchOnce(
 		hook.WithInput(ctx, promptInput),
 		hook.EventUserPromptSubmit,
@@ -61,7 +62,7 @@ func (a *Agent) dispatchRunStartHooks(ctx context.Context, session *conversation
 	}
 	for _, key := range []string{"user_prompt", "prompt"} {
 		if updated, ok := result.UpdatedInput[key].(string); ok {
-			session.History[index].Content = updated
+			conversationContext.History[index].Content = updated
 			prompt = updated
 			break
 		}
@@ -71,7 +72,7 @@ func (a *Agent) dispatchRunStartHooks(ctx context.Context, session *conversation
 	return hook.WithInput(ctx, base), nil
 }
 
-func (a *Agent) dispatchStopHook(ctx context.Context, session *conversation.Session, event TurnEndEvent) TurnEndEvent {
+func (a *Agent) dispatchStopHook(ctx context.Context, conversationContext *contextmanager.ConversationContext, event TurnEndEvent) TurnEndEvent {
 	if a == nil || a.Hooks == nil {
 		return event
 	}
@@ -80,9 +81,9 @@ func (a *Agent) dispatchStopHook(ctx context.Context, session *conversation.Sess
 	}
 	ctx = context.WithoutCancel(ctx)
 	input, _ := hook.InputFromContext(ctx)
-	if session != nil {
-		input.SessionID = session.ID
-		input.Workspace = session.Workspace
+	if conversationContext != nil {
+		input.SessionID = conversationContext.SessionID
+		input.Workspace = conversationContext.Workspace
 	}
 	input.Reason = string(event.StopReason)
 	input.Metadata = mergeLifecycleMetadata(input.Metadata, map[string]any{

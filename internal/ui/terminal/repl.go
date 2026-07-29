@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"MyCode/internal/agent"
+	contextmanager "MyCode/internal/context"
 	session "MyCode/internal/conversation"
 	"MyCode/internal/llm"
 	"bufio"
@@ -89,7 +90,13 @@ func Run(runtime Runtime) error {
 		}
 		renderer := newAgentEventRenderer(os.Stderr, os.Stdout)
 		turnContext, cancelTurn := context.WithCancel(context.Background())
-		events := runtime.Runner.RunContext(turnContext, runtime.Sessions.Current())
+		conversationContext, err := contextmanager.ContextFromSession(turnContext, runtime.Sessions.Current())
+		if err != nil {
+			cancelTurn()
+			printError("创建上下文失败", err)
+			continue
+		}
+		events := runtime.Runner.RunContext(turnContext, conversationContext)
 		interrupted, failed := consumeAgentEvents(events, interrupts, cancelTurn, renderer)
 		cancelTurn()
 		if interrupted {

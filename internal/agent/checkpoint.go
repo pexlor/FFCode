@@ -1,6 +1,7 @@
 package agent
 
 import (
+	contextmanager "MyCode/internal/context"
 	"context"
 	"errors"
 	"fmt"
@@ -47,11 +48,11 @@ type CheckpointStore interface {
 	Save(ctx context.Context, checkpoint RunCheckpoint) error
 }
 
-func (a *Agent) recoverCheckpoint(ctx context.Context, session *conversation.Session, fingerprinter ProgressFingerprinter) (string, error) {
+func (a *Agent) recoverCheckpoint(ctx context.Context, conversationContext *contextmanager.ConversationContext, fingerprinter ProgressFingerprinter) (string, error) {
 	if a.CheckpointStore == nil {
 		return "", nil
 	}
-	checkpoint, err := a.CheckpointStore.Load(ctx, session.ID)
+	checkpoint, err := a.CheckpointStore.Load(ctx, conversationContext.SessionID)
 	if errors.Is(err, ErrCheckpointNotFound) {
 		return "", nil
 	}
@@ -61,11 +62,11 @@ func (a *Agent) recoverCheckpoint(ctx context.Context, session *conversation.Ses
 	if checkpoint.Completed {
 		return "", nil
 	}
-	if checkpoint.Version != CheckpointFormatVersion || checkpoint.SessionID != session.ID {
+	if checkpoint.Version != CheckpointFormatVersion || checkpoint.SessionID != conversationContext.SessionID {
 		return "", errors.New("run checkpoint is incompatible with this session")
 	}
 
-	currentHistory := cloneHistory(session.History)
+	currentHistory := cloneHistory(conversationContext.History)
 	common := commonHistoryPrefix(checkpoint.History, currentHistory)
 	recovered := cloneHistory(checkpoint.History)
 	completed := make(map[string]struct{}, len(checkpoint.CompletedToolUseIDs))
@@ -87,15 +88,15 @@ func (a *Agent) recoverCheckpoint(ctx context.Context, session *conversation.Ses
 		recovered = append(recovered, conversation.Message{Role: conversation.TOOL, ToolResults: reconciled})
 	}
 	recovered = append(recovered, cloneHistory(currentHistory[common:])...)
-	session.History = recovered
+	conversationContext.History = recovered
 
-	currentFingerprint := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
+	currentFingerprint := workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace)
 	guidance := "A previous run was interrupted. Completed tool calls were preserved and pending calls were not replayed; inspect current state before making further changes."
 	if checkpoint.WorkspaceFingerprint != "" && checkpoint.WorkspaceFingerprint != currentFingerprint {
 		guidance += " The workspace changed since the checkpoint, so re-read relevant files before writing."
 	}
 	checkpoint.Boundary = CheckpointRecovery
-	checkpoint.History = cloneHistory(session.History)
+	checkpoint.History = cloneHistory(conversationContext.History)
 	checkpoint.PendingToolUses = nil
 	checkpoint.WorkspaceFingerprint = currentFingerprint
 	checkpoint.UpdatedAt = time.Now()
@@ -105,7 +106,7 @@ func (a *Agent) recoverCheckpoint(ctx context.Context, session *conversation.Ses
 	return guidance, nil
 }
 
-func (a *Agent) saveCheckpoint(ctx context.Context, session *conversation.Session, fingerprinter ProgressFingerprinter, boundary CheckpointBoundary, pending []llm.ToolCallComplete, completedIDs []string, completed bool) error {
+func (a *Agent) saveCheckpoint(ctx context.Context, conversationContext *contextmanager.ConversationContext, fingerprinter ProgressFingerprinter, boundary CheckpointBoundary, pending []llm.ToolCallComplete, completedIDs []string, completed bool) error {
 	if a.CheckpointStore == nil {
 		return nil
 	}
@@ -115,12 +116,12 @@ func (a *Agent) saveCheckpoint(ctx context.Context, session *conversation.Sessio
 	}
 	checkpoint := RunCheckpoint{
 		Version:              CheckpointFormatVersion,
-		SessionID:            session.ID,
+		SessionID:            conversationContext.SessionID,
 		Boundary:             boundary,
 		Completed:            completed,
-		Workspace:            session.Workspace,
-		WorkspaceFingerprint: workspaceFingerprint(ctx, fingerprinter, session.Workspace),
-		History:              cloneHistory(session.History),
+		Workspace:            conversationContext.Workspace,
+		WorkspaceFingerprint: workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace),
+		History:              cloneHistory(conversationContext.History),
 		PendingToolUses:      pendingUses,
 		CompletedToolUseIDs:  append([]string(nil), completedIDs...),
 		UpdatedAt:            time.Now(),
@@ -131,13 +132,13 @@ func (a *Agent) saveCheckpoint(ctx context.Context, session *conversation.Sessio
 	return nil
 }
 
-func (a *Agent) saveInterruptedCheckpoint(session *conversation.Session, fingerprinter ProgressFingerprinter) {
-	if a.CheckpointStore == nil || session == nil {
+func (a *Agent) saveInterruptedCheckpoint(conversationContext *contextmanager.ConversationContext, fingerprinter ProgressFingerprinter) {
+	if a.CheckpointStore == nil || conversationContext == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = a.saveCheckpoint(ctx, session, fingerprinter, CheckpointInterrupted, nil, nil, false)
+	_ = a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointInterrupted, nil, nil, false)
 }
 
 func commonHistoryPrefix(left, right []conversation.Message) int {

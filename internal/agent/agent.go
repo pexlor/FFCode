@@ -126,22 +126,22 @@ func (a *Agent) ThinkingEffort() (string, error) {
 }
 
 // Run executes the agent loop and emits events for upper-layer UI.
-func (a *Agent) Run(session *conversation.Session) <-chan AgentEvent {
-	return a.RunContext(agentContext(a), session)
+func (a *Agent) Run(conversationContext *contextmanager.ConversationContext) <-chan AgentEvent {
+	return a.RunContext(agentContext(a), conversationContext)
 }
 
 // RunContext executes one agent turn with a caller-controlled context. This
 // lets an interactive UI interrupt an in-flight model request or tool call.
-func (a *Agent) RunContext(ctx context.Context, session *conversation.Session) <-chan AgentEvent {
+func (a *Agent) RunContext(ctx context.Context, conversationContext *contextmanager.ConversationContext) <-chan AgentEvent {
 	var budget RunBudget
 	if a != nil {
 		budget = a.RunBudget
 	}
-	return a.RunContextWithBudget(ctx, session, budget)
+	return a.RunContextWithBudget(ctx, conversationContext, budget)
 }
 
 // RunContextWithBudget executes one turn with caller-supplied resource limits.
-func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.Session, budget RunBudget) <-chan AgentEvent {
+func (a *Agent) RunContextWithBudget(ctx context.Context, conversationContext *contextmanager.ConversationContext, budget RunBudget) <-chan AgentEvent {
 	agentEventCh := make(chan AgentEvent, 32)
 	if ctx == nil {
 		ctx = agentContext(a)
@@ -149,6 +149,9 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 
 	go func() {
 		defer close(agentEventCh)
+		// Keep the presentation/session layer synchronized without making the
+		// agent depend on a Session aggregate.
+		defer conversationContext.Commit()
 		finished := false
 		checkpointAttempted := false
 		stopAttempted := false
@@ -166,7 +169,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			}
 			if !stopAttempted {
 				stopAttempted = true
-				event = a.dispatchStopHook(lifecycleCtx, session, event)
+				event = a.dispatchStopHook(lifecycleCtx, conversationContext, event)
 			}
 			sendTurnEndEvent(agentEventCh, event)
 			finished = true
@@ -206,45 +209,45 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			fingerprinter = gitProgressFingerprinter{}
 		}
 
-		if err := a.validate(session); err != nil {
+		if err := a.validate(conversationContext); err != nil {
 			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
 		ctx = hook.WithInput(ctx, hook.Input{
-			SessionID:  session.ID,
-			Workspace:  session.Workspace,
-			UserPrompt: latestUserRequest(session.History),
-			Prompt:     latestUserRequest(session.History),
+			SessionID:  conversationContext.SessionID,
+			Workspace:  conversationContext.Workspace,
+			UserPrompt: latestUserRequest(conversationContext.History),
+			Prompt:     latestUserRequest(conversationContext.History),
 		})
-		ctx, err = a.dispatchRunStartHooks(ctx, session)
+		ctx, err = a.dispatchRunStartHooks(ctx, conversationContext)
 		if err != nil {
 			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
-		recoveryGuidance, err := a.recoverCheckpoint(ctx, session, fingerprinter)
+		recoveryGuidance, err := a.recoverCheckpoint(ctx, conversationContext, fingerprinter)
 		if err != nil {
 			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
 		persistInterrupted = func() {
-			a.saveInterruptedCheckpoint(session, fingerprinter)
+			a.saveInterruptedCheckpoint(conversationContext, fingerprinter)
 		}
 		if err := ctx.Err(); err != nil {
 			finish(turnEndFromError(err, budgetState.usage))
 			return
 		}
-		evidenceCoordinator.Start(ctx, session.Workspace)
+		evidenceCoordinator.Start(ctx, conversationContext.Workspace)
 		sendAgentEvent(ctx, agentEventCh, RunPhaseEvent{Phase: PhaseExplore, Reason: PhaseReasonRunStarted})
 
 		for iteration := 0; iteration < a.MaxIterations; iteration++ {
 			budgetTransition := phaseController.observeBudget(budgetState.snapshot(time.Now()))
 			emitPhaseTransition(ctx, agentEventCh, budgetTransition)
 			if budgetTransition.Changed && budgetTransition.Reason == PhaseReasonSoftBudget {
-				_, warnings := evidenceCoordinator.BeforeFinalize(ctx, session.Workspace, true)
+				_, warnings := evidenceCoordinator.BeforeFinalize(ctx, conversationContext.Workspace, true)
 				emitQualityWarnings(ctx, agentEventCh, warnings)
 			}
 			toolSchemas := a.toolManager.BuildAllSchemas()
-			systemPrompt := session.SystemPrompt
+			systemPrompt := conversationContext.SystemPrompt
 			if a.skillManager != nil {
 				systemPrompt = appendSkillPrompt(systemPrompt, a.skillManager.CatalogPrompt(), a.skillManager.Instructions())
 				toolSchemas = filterSkillTools(toolSchemas, a.skillManager.AllowedTools())
@@ -252,13 +255,13 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			systemPrompt = appendSkillPrompt(systemPrompt, runPhaseGuidance(phaseController.phase()))
 			systemPrompt = appendSkillPrompt(systemPrompt, progressTracker.convergenceGuidance())
 			systemPrompt = appendSkillPrompt(systemPrompt, recoveryGuidance)
-			history := session.History
+			history := conversationContext.History
 			var contextView *contextmanager.ContextView
 			if a.contextManager != nil {
 				// 每次模型请求（包括同一 Turn 中的工具循环）都重新构建 ContextView。
 				// Build 内部通过同步游标避免重复写 transcript，并通过摘要检查点避免重复压缩。
 				view, err := a.contextManager.Build(ctx, contextmanager.BuildInput{
-					Session: session, SystemPrompt: systemPrompt, CurrentRequest: latestUserRequest(session.History),
+					Context: conversationContext, SystemPrompt: systemPrompt, CurrentRequest: latestUserRequest(conversationContext.History),
 					AvailableTools: toolSchemas,
 				})
 				if err != nil {
@@ -323,23 +326,23 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 			}
 
 			if len(toolCalls) == 0 {
-				observation, warnings := evidenceCoordinator.BeforeFinalize(ctx, session.Workspace, false)
+				observation, warnings := evidenceCoordinator.BeforeFinalize(ctx, conversationContext.Workspace, false)
 				emitPhaseTransition(ctx, agentEventCh, phaseController.observe(observation))
 				emitQualityWarnings(ctx, agentEventCh, warnings)
 				if assistantText != "" || len(thinkingBlocks) > 0 {
-					session.History = append(session.History, conversation.Message{
+					conversationContext.History = append(conversationContext.History, conversation.Message{
 						Role:           conversation.ASSISTANT,
 						Content:        assistantText,
 						ThinkingBlocks: thinkingBlocks,
 					})
 				}
 				if a.contextManager != nil {
-					if err := a.contextManager.SyncSession(ctx, session); err != nil {
+					if err := a.contextManager.SyncContext(ctx, conversationContext); err != nil {
 						finish(turnEndFromError(err, budgetState.usage))
 						return
 					}
 				}
-				if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointCompleted, nil, nil, true); err != nil {
+				if err := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointCompleted, nil, nil, true); err != nil {
 					finish(turnEndFromError(err, budgetState.usage))
 					return
 				}
@@ -351,7 +354,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
-			workspaceBefore := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
+			workspaceBefore := workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace)
 			blockedDecisions := progressTracker.beforeTools(toolCalls, workspaceBefore)
 			blocked := make(map[string]ProgressDecision, len(blockedDecisions))
 			for _, decision := range blockedDecisions {
@@ -359,28 +362,28 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				sendAgentEvent(ctx, agentEventCh, progressEvent(decision))
 			}
 
-			session.History = append(session.History, conversation.Message{
+			conversationContext.History = append(conversationContext.History, conversation.Message{
 				Role:           conversation.ASSISTANT,
 				Content:        assistantText,
 				ThinkingBlocks: thinkingBlocks,
 				ToolUses:       toToolUseBlocks(toolCalls),
 			})
-			if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointModel, toolCalls, nil, false); err != nil {
+			if err := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointModel, toolCalls, nil, false); err != nil {
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
 
 			toolResults, postHookErr := a.executeToolsWithBlocked(ctx, toolCalls, blocked, agentEventCh)
-			session.AddToolResult(toolResults)
-			checkpointErr := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointTools, nil, completedToolIDs(toolCalls), false)
+			conversationContext.History = append(conversationContext.History, conversation.Message{Role: conversation.TOOL, ToolResults: toolResults})
+			checkpointErr := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointTools, nil, completedToolIDs(toolCalls), false)
 			if err := errors.Join(postHookErr, checkpointErr); err != nil {
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
-			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, session.Workspace)
+			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace)
 			executedCalls, executedResults := progressInputs(toolCalls, toolResults, blocked)
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observe(
-				evidenceCoordinator.AfterTools(ctx, session.Workspace, executedCalls, executedResults),
+				evidenceCoordinator.AfterTools(ctx, conversationContext.Workspace, executedCalls, executedResults),
 			))
 			if decision := progressTracker.observe(executedCalls, executedResults, workspaceAfter); decision.Kind != ProgressNone {
 				sendAgentEvent(ctx, agentEventCh, progressEvent(decision))
@@ -394,7 +397,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, session *conversation.
 				case ProgressFinalize:
 					emitPhaseTransition(ctx, agentEventCh, phaseController.transition(PhaseFinalize, PhaseReasonNoProgress))
 				case ProgressStop:
-					if err := a.saveCheckpoint(ctx, session, fingerprinter, CheckpointCompleted, nil, completedToolIDs(toolCalls), true); err != nil {
+					if err := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointCompleted, nil, completedToolIDs(toolCalls), true); err != nil {
 						finish(turnEndFromError(err, budgetState.usage))
 						return
 					}
@@ -536,11 +539,11 @@ func latestUserRequest(history []conversation.Message) string {
 	return ""
 }
 
-func (a *Agent) run(session *conversation.Session) <-chan AgentEvent {
-	return a.Run(session)
+func (a *Agent) run(conversationContext *contextmanager.ConversationContext) <-chan AgentEvent {
+	return a.Run(conversationContext)
 }
 
-func (a *Agent) validate(session *conversation.Session) error {
+func (a *Agent) validate(conversationContext *contextmanager.ConversationContext) error {
 	if a == nil {
 		return errors.New("agent cannot be nil")
 	}
@@ -553,8 +556,8 @@ func (a *Agent) validate(session *conversation.Session) error {
 	if a.toolManager == nil {
 		return errors.New("tool manager cannot be nil")
 	}
-	if session == nil {
-		return errors.New("session cannot be nil")
+	if conversationContext == nil {
+		return errors.New("conversation context cannot be nil")
 	}
 	if a.MaxIterations <= 0 {
 		return errors.New("max iterations must be greater than zero")

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
 	"MyCode/internal/llm"
 	"MyCode/internal/tool"
@@ -109,8 +110,8 @@ func TestRunBudgetDeadlineCancelsBlockedProvider(t *testing.T) {
 	}
 }
 
-func testSession() *conversation.Session {
-	return &conversation.Session{ID: "session-test", History: []conversation.Message{{Role: conversation.USER, Content: "test"}}}
+func testSession() *contextmanager.ConversationContext {
+	return &contextmanager.ConversationContext{SessionID: "session-test", History: []conversation.Message{{Role: conversation.USER, Content: "test"}}}
 }
 
 func terminalEvent(events <-chan AgentEvent) TurnEndEvent {

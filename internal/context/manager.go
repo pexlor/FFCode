@@ -40,6 +40,9 @@ type ContextView struct {
 
 // BuildInput 汇总构建模型请求所需的运行时信息。
 type BuildInput struct {
+	Context *ConversationContext
+	// Session is retained only for callers migrating to Context. Agent never
+	// supplies it; new code must use Context.
 	Session        *conversation.Session
 	SystemPrompt   string
 	CurrentTurnID  string
@@ -135,29 +138,32 @@ func (m *ContextManager) SetHookManager(dispatcher *hook.Dispatcher) {
 // 最关键的约束是：存在 active summary 时，只读取 CoveredThroughMessageID 之后的原文，
 // 因此已经压缩过的消息不会在下一轮再次进入模型，也不会被重复摘要。
 func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextView, error) {
-	if input.Session == nil || !validIdentifier(input.Session.ID) {
+	if input.Context == nil && input.Session != nil {
+		input.Context = &ConversationContext{
+			SessionID: input.Session.ID, LifecycleKey: input.Session.LifecycleKey(), Workspace: input.Session.Workspace,
+			SystemPrompt: input.Session.SystemPrompt, LongTermMemory: input.Session.LongTermMemory, History: input.Session.History,
+		}
+	}
+	if input.Context == nil || !validIdentifier(input.Context.SessionID) {
 		return nil, ErrInvalidIdentifier
 	}
-	if err := input.Session.RefreshLongTermMemory(ctx); err != nil {
-		return nil, fmt.Errorf("load session memory: %w", err)
-	}
-	if input.Session.History != nil {
-		if err := m.syncHistory(ctx, input.Session.ID, input.Session.History); err != nil {
+	if input.Context.History != nil {
+		if err := m.syncHistory(ctx, input.Context.SessionID, input.Context.History); err != nil {
 			return nil, err
 		}
 	}
 	// active summary 与覆盖游标共同构成持久化压缩检查点。
-	active, err := m.store.ActiveSummary(ctx, input.Session.ID)
+	active, err := m.store.ActiveSummary(ctx, input.Context.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	stored, err := m.messagesForView(ctx, input.Session.ID, active)
+	stored, err := m.messagesForView(ctx, input.Context.SessionID, active)
 	if err != nil {
 		return nil, err
 	}
 	// 第 1 层：新出现的大工具结果超过单项或批次阈值时才归档。
 	beforeTools := toolResultTokens(m.estimator, m.model.ModelName, stored)
-	stored, err = m.offloader.Process(ctx, input.Session.ID, stored)
+	stored, err = m.offloader.Process(ctx, input.Context.SessionID, stored)
 	if err != nil {
 		return nil, err
 	}
@@ -181,38 +187,38 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	}
 	systemPrompt := input.SystemPrompt
 	if strings.TrimSpace(systemPrompt) == "" {
-		systemPrompt = input.Session.SystemPrompt
+		systemPrompt = input.Context.SystemPrompt
 	}
 	systemPrompt = appendRules(systemPrompt, rules)
-	if strings.TrimSpace(input.Session.LongTermMemory) != "" {
-		systemPrompt = appendMemorySummary(systemPrompt, input.Session.LongTermMemory)
+	if strings.TrimSpace(input.Context.LongTermMemory) != "" {
+		systemPrompt = appendMemorySummary(systemPrompt, input.Context.LongTermMemory)
 	}
 	selectedTools := m.loader.SelectTools(input.CurrentRequest, activeToolNames(stored), input.AvailableTools)
-	view := m.renderView(input.Session.ID, systemPrompt, active, stored, selectedTools, reports)
+	view := m.renderView(input.Context.SessionID, systemPrompt, active, stored, selectedTools, reports)
 	// 第 3 层：前三层处理后仍达到软阈值，才尝试增量摘要。
 	// Compactor 内部还会检查是否存在足够的新完整 Turn，避免无意义地重复调用模型。
 	if view.EstimatedTokens >= m.budget.SoftCompactLimit {
-		current := SummarySnapshot{SessionID: input.Session.ID}
+		current := SummarySnapshot{SessionID: input.Context.SessionID}
 		if active != nil {
 			current = *active
 		}
-		updated, changed, compactErr := m.compactor.Compact(ctx, input.Session.ID, current, stored, max(1, m.budget.HardInputLimit/4))
+		updated, changed, compactErr := m.compactor.Compact(ctx, input.Context.SessionID, current, stored, max(1, m.budget.HardInputLimit/4))
 		if compactErr != nil {
 			return nil, compactErr
 		}
 		if changed {
 			// 摘要提交成功后立即从新游标之后重新读取，确保当前请求不再携带已覆盖原文。
-			stored, err = m.store.ListMessagesAfter(ctx, input.Session.ID, updated.CoveredThroughMessageID)
+			stored, err = m.store.ListMessagesAfter(ctx, input.Context.SessionID, updated.CoveredThroughMessageID)
 			if err != nil {
 				return nil, err
 			}
-			stored, err = m.offloader.Process(ctx, input.Session.ID, stored)
+			stored, err = m.offloader.Process(ctx, input.Context.SessionID, stored)
 			if err != nil {
 				return nil, err
 			}
 			reports = append(reports, LayerReport{Layer: "conversation_compactor", BeforeTokens: view.EstimatedTokens, Reason: "soft compact limit reached"})
 			active = &updated
-			view = m.renderView(input.Session.ID, systemPrompt, active, stored, selectedTools, reports)
+			view = m.renderView(input.Context.SessionID, systemPrompt, active, stored, selectedTools, reports)
 		}
 	}
 	// BudgetGuard 是发送请求前的最后防线；超过硬限制时绝不把请求交给模型。
@@ -285,12 +291,16 @@ func (m *ContextManager) syncHistory(ctx context.Context, sessionID string, hist
 	return nil
 }
 
-// SyncSession 在一次 Agent Run 结束后立即持久化最终 assistant 回复。
-func (m *ContextManager) SyncSession(ctx context.Context, session *conversation.Session) error {
-	if session == nil || !validIdentifier(session.ID) {
+// SyncContext 在一次 Agent Run 结束后立即持久化最终 assistant 回复。
+func (m *ContextManager) SyncContext(ctx context.Context, conversationContext *ConversationContext) error {
+	if conversationContext == nil || !validIdentifier(conversationContext.SessionID) {
 		return ErrInvalidIdentifier
 	}
-	return m.syncHistory(ctx, session.ID, session.History)
+	if err := m.syncHistory(ctx, conversationContext.SessionID, conversationContext.History); err != nil {
+		return err
+	}
+	conversationContext.Commit()
+	return nil
 }
 
 // fromMessage 为 Session 消息生成稳定的 MessageID 和 TurnID，并识别最终 assistant 回复。

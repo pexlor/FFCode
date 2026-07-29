@@ -73,7 +73,7 @@ func TestAgentSavesInterruptedCheckpointAfterDeadline(t *testing.T) {
 	if terminal.StopReason != StopDeadlineExceeded {
 		t.Fatalf("terminal = %+v", terminal)
 	}
-	if checkpoint.Boundary != CheckpointInterrupted || checkpoint.Completed || checkpoint.SessionID != session.ID {
+	if checkpoint.Boundary != CheckpointInterrupted || checkpoint.Completed || checkpoint.SessionID != session.SessionID {
 		t.Fatalf("checkpoint = %+v", checkpoint)
 	}
 	if len(checkpoint.History) != len(session.History) {

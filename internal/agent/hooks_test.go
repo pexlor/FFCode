@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
 	"MyCode/internal/hook"
 	"MyCode/internal/llm"
@@ -64,7 +65,11 @@ func TestSessionStartRunsOncePerTransitionAcrossServiceAndAgent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runner.dispatchRunStartHooks(context.Background(), session); err != nil {
+		conversationContext, contextErr := contextmanager.ContextFromSession(context.Background(), session)
+		if contextErr != nil {
+			t.Fatal(contextErr)
+		}
+		if _, err := runner.dispatchRunStartHooks(context.Background(), conversationContext); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"MyCode/internal/agent"
+	contextmanager "MyCode/internal/context"
 	"MyCode/internal/conversation"
 	"MyCode/internal/hook"
 	"MyCode/internal/llm"
@@ -124,8 +125,8 @@ func (m *Manager) run(ctx context.Context, request Request, budget agent.RunBudg
 	if err != nil {
 		return runResult{Result: failedResult(StatusFailed, err)}
 	}
-	session := &conversation.Session{
-		ID:           sessionID,
+	conversationContext := &contextmanager.ConversationContext{
+		SessionID:    sessionID,
 		Workspace:    request.Workspace,
 		SystemPrompt: childSystemPrompt(),
 		History:      []conversation.Message{{Role: conversation.USER, Content: childRequest(request)}},
@@ -142,7 +143,7 @@ func (m *Manager) run(ctx context.Context, request Request, budget agent.RunBudg
 	}
 	lifecycle := &agent.Agent{Hooks: m.hooks}
 	runErr := lifecycle.RunSubagent(ctx, hookInput, func(runCtx context.Context) error {
-		return collectChild(runCtx, child.RunContextWithBudget(runCtx, session, budget), request.Workspace, &result)
+		return collectChild(runCtx, child.RunContextWithBudget(runCtx, conversationContext, budget), request.Workspace, &result)
 	})
 	if runErr != nil && result.Err == nil {
 		result.Err = runErr
