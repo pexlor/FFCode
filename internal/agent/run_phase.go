@@ -121,15 +121,6 @@ func isWriteTool(name string) bool {
 }
 
 func isVerificationCall(call llm.ToolCallComplete) bool {
-	if !strings.EqualFold(call.ToolName, "bash") {
-		return false
-	}
-	command, _ := call.Arguments["command"].(string)
-	command = strings.ToLower(strings.TrimSpace(command))
-	for _, marker := range []string{"go test", "go vet", "cargo test", "npm test", "pytest", "make test", "just test"} {
-		if strings.Contains(command, marker) {
-			return true
-		}
-	}
-	return false
+	_, ok := (defaultVerificationClassifier{}).Classify(call)
+	return ok
 }
