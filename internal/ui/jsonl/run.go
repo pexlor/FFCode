@@ -8,10 +8,10 @@ import (
 	"io"
 	"strings"
 
-	"MyCode/internal/agent"
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
-	"MyCode/internal/protocol"
+	"FFCode/internal/agent"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
+	"FFCode/internal/protocol"
 )
 
 type TurnRunner interface {

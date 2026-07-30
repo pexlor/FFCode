@@ -1,7 +1,7 @@
 package contextmanager
 
 import (
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 	"context"
 	"io"
 	"os"

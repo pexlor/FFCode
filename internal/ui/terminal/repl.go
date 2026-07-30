@@ -1,10 +1,10 @@
 package terminal
 
 import (
-	"MyCode/internal/agent"
-	contextmanager "MyCode/internal/context"
-	session "MyCode/internal/conversation"
-	"MyCode/internal/llm"
+	"FFCode/internal/agent"
+	contextmanager "FFCode/internal/context"
+	session "FFCode/internal/conversation"
+	"FFCode/internal/llm"
 	"bufio"
 	"context"
 	"errors"

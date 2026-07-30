@@ -1,9 +1,9 @@
 package subagent
 
 import (
-	"MyCode/internal/permission"
-	"MyCode/internal/tool"
-	"MyCode/internal/tool/builtin"
+	"FFCode/internal/permission"
+	"FFCode/internal/tool"
+	"FFCode/internal/tool/builtin"
 )
 
 func newReadOnlyTools(workspace string) (*tool.ToolsManager, error) {

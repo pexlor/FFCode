@@ -36,6 +36,22 @@ func TestKnowledgeLoaderRejectsIncludeCycle(t *testing.T) {
 	}
 }
 
+func TestKnowledgeLoaderLoadsSymlinkedRootFileWithinWorkspace(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "CLAUDE.md"), "project rules\n")
+	if err := os.Symlink("CLAUDE.md", filepath.Join(root, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	documents, err := (KnowledgeLoader{Workspace: root}).Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 1 || documents[0].Content != "project rules\n" {
+		t.Fatalf("unexpected documents: %+v", documents)
+	}
+}
+
 func TestKnowledgeLoaderRejectsOutsideAndSymlinkIncludes(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.md")

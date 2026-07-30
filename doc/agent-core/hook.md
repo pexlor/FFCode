@@ -34,7 +34,7 @@ Agent 使用统一的结束函数触发 `stop`，覆盖成功、Provider 失败�
 
 ### 工作区配置
 
-项目 Hook 默认关闭，因为配置中的命令会以 MyCode 进程的用户权限运行。确认工作区可信后，在用户配置 `~/.ffcode/config.yaml` 中显式启用：
+项目 Hook 默认关闭，因为配置中的命令会以 FFCode 进程的用户权限运行。确认工作区可信后，在用户配置 `~/.ffcode/config.yaml` 中显式启用：
 
 ```yaml
 hooks:
@@ -79,7 +79,7 @@ hooks:
 - `MYCODE_HOOK_TOOL_USE_ID`
 - `MYCODE_WORKSPACE`
 
-项目 Hook 是受信任的本地代码，拥有当前 MyCode 进程的用户权限，不经过 Tool 权限网关。不要在不可信工作区启用 Hook 配置。
+项目 Hook 是受信任的本地代码，拥有当前 FFCode 进程的用户权限，不经过 Tool 权限网关。不要在不可信工作区启用 Hook 配置。
 
 ### 输入与输出
 
@@ -109,7 +109,7 @@ hooks:
 - `fail_open` 记录失败后继续；`fail_closed` 和 `abort` 返回错误并阻止尚未发生的动作。
 - 默认仅 `pre_tool_use` 使用 `fail_closed`，其他事件使用 `fail_open`。全局或逐事件配置可以覆盖默认值。
 - Dispatcher 使用 Context 记录活动 Event、深度和总调用次数。同一 Event 重入、超过 `max_depth` 或 `max_invocations` 都返回 `ErrRecursionLimit`。
-- 外部命令通过 `MYCODE_HOOK_DEPTH` 继承递归深度，避免 Hook 再启动 MyCode 时绕过保护。
+- 外部命令通过 `MYCODE_HOOK_DEPTH` 继承递归深度，避免 Hook 再启动 FFCode 时绕过保护。
 - `DispatchOnce` 对并发调用进行单次合并，用于 Session 转换和 Prompt 去重；完成结果缓存有固定上限，避免长会话无限增长。
 
 ## 功能测试

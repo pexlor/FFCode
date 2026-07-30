@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"MyCode/internal/memory"
-	"MyCode/internal/tool"
+	"FFCode/internal/memory"
+	"FFCode/internal/tool"
 )
 
 type LoadedRule struct {

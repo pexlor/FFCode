@@ -1,8 +1,8 @@
 package fileconversation
 
 import (
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
 	"context"
 	"os"
 	"path/filepath"

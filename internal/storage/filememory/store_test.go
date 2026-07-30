@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/memory"
+	"FFCode/internal/memory"
 )
 
 func TestExtractionCompletionIsIdempotent(t *testing.T) {

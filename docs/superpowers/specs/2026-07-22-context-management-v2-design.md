@@ -2,7 +2,7 @@
 
 ## 1. 背景
 
-MyCode 当前通过 `message.MessageManager.History` 保存会话，并在每次 Agent
+FFCode 当前通过 `message.MessageManager.History` 保存会话，并在每次 Agent
 迭代时将全部历史消息和全部工具定义发送给模型。随着会话持续，文件内容、工具
 结果、重复测试日志和对话过程会持续占用上下文，最终导致成本上升、模型注意力
 下降或请求超过模型窗口。

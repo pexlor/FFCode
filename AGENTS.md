@@ -1,4 +1,4 @@
-# MyCode 项目 Agent 规则
+# FFCode 项目 Agent 规则
 
 - 修改 Go 文件后运行 `gofmt`。
 - 提交前至少运行 `go test ./...`。

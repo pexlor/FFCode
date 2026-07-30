@@ -32,6 +32,7 @@
 3. agent team (暂时不做)
 4. skill 系统 done
 5. hook 系统 done
+6. git worktree
 
 # 长期任务
 1. 架构优化（人类架构）
@@ -56,6 +57,13 @@
    - 根因：并发工具执行等待期间收到 context cancellation 时，`executeTools` 返回了尚未填充的预分配结果，产生空 `ToolUseID` 并污染会话历史。
    - 修复：预先为每个结果保留原始 `ToolUseID` 和取消错误，已完成的工具结果再覆盖对应位置。
    - 回归：增加工具执行取消测试，并通过 `go test ./...` 和 `go test -race ./internal/agent`。
+
+3. › GetOneDiskHostdevDriver 会被传入localDiskSpec为nil吗
+
+tokens: input 0 | output 0 | total 0
+failed: agent_error
+
+执行失败: knowledge path uses symlink: /Users/fengrui03/Code/nova-go-ebcc/nova-go/AGENTS.md
 
 # Agent 核心能力优化
 ## 运行时可靠性

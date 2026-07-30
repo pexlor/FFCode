@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"MyCode/internal/llm"
-	"MyCode/internal/permission"
-	"MyCode/internal/tool"
+	"FFCode/internal/llm"
+	"FFCode/internal/permission"
+	"FFCode/internal/tool"
 )
 
 func TestRunPhaseControllerUsesEvidenceAndAllowsRework(t *testing.T) {

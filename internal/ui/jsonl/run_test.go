@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"MyCode/internal/agent"
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
+	"FFCode/internal/agent"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
 )
 
 type fakeSessions struct {

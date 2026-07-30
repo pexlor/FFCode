@@ -1,7 +1,16 @@
-.worktrees/
-.context/
-.ffcode/
+# Build artifacts
+/FFCode
+/bin/
 cmd/FFCode/FFCode
+
+# FFCode runtime state
+/.worktrees/
+/.context/
+/.ffcode/
 default.yaml
 .superpowers
 .agent
+
+# Go tooling
+*.test
+coverage.out

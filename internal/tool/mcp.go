@@ -1,7 +1,7 @@
 package tool
 
 import (
-	"MyCode/internal/mcp"
+	"FFCode/internal/mcp"
 	"context"
 	"fmt"
 	"regexp"

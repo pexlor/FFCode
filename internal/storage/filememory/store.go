@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/memory"
+	"FFCode/internal/conversation"
+	"FFCode/internal/memory"
 )
 
 const formatVersion = 1

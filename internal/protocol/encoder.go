@@ -6,8 +6,8 @@ import (
 	"io"
 	"sync"
 
-	"MyCode/internal/agent"
-	"MyCode/internal/llm"
+	"FFCode/internal/agent"
+	"FFCode/internal/llm"
 )
 
 type Encoder struct {

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/memory"
-	filememory "MyCode/internal/storage/filememory"
+	"FFCode/internal/conversation"
+	"FFCode/internal/memory"
+	filememory "FFCode/internal/storage/filememory"
 )
 
 type fakeTranscriptSource struct {

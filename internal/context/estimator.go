@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"math"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/tool"
+	"FFCode/internal/conversation"
+	"FFCode/internal/tool"
 )
 
 type TokenEstimator interface {

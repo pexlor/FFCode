@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/llm"
+	"FFCode/internal/conversation"
+	"FFCode/internal/llm"
 )
 
 type LLMSummarizer struct {

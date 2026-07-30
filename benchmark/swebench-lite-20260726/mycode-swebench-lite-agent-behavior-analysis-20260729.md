@@ -1,4 +1,4 @@
-# MyCode SWE-bench Lite Agent 行为深度分析
+# FFCode SWE-bench Lite Agent 行为深度分析
 
 ## 1. 分析范围
 
@@ -17,7 +17,7 @@
 - Agent 补丁：/tmp/mycode-swe-full/patches/；
 - Evaluator 结果：/tmp/mycode-swe-full/evaluator-watch/evaluation-results.jsonl。
 
-本次没有修改 MyCode 的实现代码，本文只记录行为分析和后续优化要求。
+本次没有修改 FFCode 的实现代码，本文只记录行为分析和后续优化要求。
 
 ## 2. 核心判断
 
@@ -238,7 +238,7 @@ Explore 阶段必须产出：
 
 ## 10. 结论
 
-本次日志证明，MyCode 的最大提升空间在 Agent 的决策和收尾流程，而不只是模型、Token 或运行时间。
+本次日志证明，FFCode 的最大提升空间在 Agent 的决策和收尾流程，而不只是模型、Token 或运行时间。
 
 优先顺序应是：
 

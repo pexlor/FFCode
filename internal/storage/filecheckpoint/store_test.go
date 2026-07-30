@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"MyCode/internal/agent"
-	"MyCode/internal/conversation"
+	"FFCode/internal/agent"
+	"FFCode/internal/conversation"
 )
 
 func TestStoreWritesAtomicGenerationsAndLoadsLatest(t *testing.T) {

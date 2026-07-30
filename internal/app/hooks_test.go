@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	appconfig "MyCode/internal/config"
-	"MyCode/internal/hook"
+	appconfig "FFCode/internal/config"
+	"FFCode/internal/hook"
 )
 
 func TestWorkspaceHooksRequireExplicitOptIn(t *testing.T) {

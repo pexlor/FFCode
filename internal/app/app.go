@@ -1,11 +1,11 @@
 package app
 
 import (
-	appconfig "MyCode/internal/config"
-	"MyCode/internal/prompt"
-	jsonlui "MyCode/internal/ui/jsonl"
-	"MyCode/internal/ui/terminal"
-	workspacepath "MyCode/internal/workspace"
+	appconfig "FFCode/internal/config"
+	"FFCode/internal/prompt"
+	jsonlui "FFCode/internal/ui/jsonl"
+	"FFCode/internal/ui/terminal"
+	workspacepath "FFCode/internal/workspace"
 	"context"
 	"fmt"
 	"io"

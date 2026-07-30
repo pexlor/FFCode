@@ -3,7 +3,7 @@
 ## 1. 文档状态
 
 - 状态：可实施
-- 适用范围：`MyCode` 本地单用户 Agent
+- 适用范围：`FFCode` 本地单用户 Agent
 - 设计日期：2026-07-26
 - 参考实现：`/Users/fengrui03/Desktop/codex/codex-rs/memories`、`codex-rs/state/src/runtime/memories.rs`
 - 关联模块：`internal/conversation`、`internal/context`、`internal/storage/fileconversation`、`internal/prompt`

@@ -6,7 +6,7 @@ Design reviewed and confirmed by the user on 2026-07-28. Implementation plan int
 
 ## Context
 
-MyCode already separates the Agent loop from conversation, context, tools, and terminal rendering. The Agent also provides run budgets, cancellation, progress detection, checkpoints, lifecycle hooks, and tool scheduling. `subagent` and `agent team` are currently listed as future capabilities.
+FFCode already separates the Agent loop from conversation, context, tools, and terminal rendering. The Agent also provides run budgets, cancellation, progress detection, checkpoints, lifecycle hooks, and tool scheduling. `subagent` and `agent team` are currently listed as future capabilities.
 
 This design adds the first capability: a primary Agent can explicitly delegate independent, read-only analysis tasks to child Agents. It does not introduce free-form Agent-to-Agent messaging or a general workflow DAG.
 

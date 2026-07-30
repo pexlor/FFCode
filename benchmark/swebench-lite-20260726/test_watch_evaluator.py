@@ -82,7 +82,7 @@ class WatchEvaluatorTest(unittest.TestCase):
             watch_evaluator.write_prediction(
                 output,
                 {"instance_id": "case-1", "patch_path": str(patch)},
-                "MyCode-MiniMax-M3",
+                "FFCode-MiniMax-M3",
             )
 
             rows = [json.loads(line) for line in output.read_text().splitlines()]

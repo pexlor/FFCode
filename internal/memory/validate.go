@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 )
 
 func ValidateRawMemory(raw RawMemory, messages []conversation.StoredMessage) error {

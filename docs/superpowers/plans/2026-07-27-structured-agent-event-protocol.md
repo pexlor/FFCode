@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 为 MyCode 增加稳定的 Agent 生命周期语义和 `--output-format jsonl` 机器接口，并迁移现有自动化调用方停止解析终端正文。
+**目标：** 为 FFCode 增加稳定的 Agent 生命周期语义和 `--output-format jsonl` 机器接口，并迁移现有自动化调用方停止解析终端正文。
 
 **架构：** `internal/agent` 是 Turn 终止状态的唯一所有者；`internal/protocol` 只负责把 AgentEvent 编码成版本化 JSONL；`internal/ui/jsonl` 负责按行读取请求和驱动会话；`internal/app` 选择 text 或 jsonl 前端。终端 UI 和自动化调用方消费同一套 Agent 事件，不再推断完成状态。
 

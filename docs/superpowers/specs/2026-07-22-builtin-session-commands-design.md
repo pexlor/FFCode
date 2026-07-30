@@ -2,7 +2,7 @@
 
 ## 1. 背景
 
-MyCode 的交互模式目前在 `internal/repl/ui.go` 中通过 `handleCommand` 识别
+FFCode 的交互模式目前在 `internal/repl/ui.go` 中通过 `handleCommand` 识别
 `/help`、`/clear` 和 `/exit`。普通输入直接追加到 `MessageManager.History`，命令解析、
 终端输出和 REPL 生命周期集中在同一个文件中。
 

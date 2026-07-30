@@ -3,10 +3,10 @@ package app
 import (
 	"testing"
 
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
-	"MyCode/internal/permission"
-	"MyCode/internal/tool"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
+	"FFCode/internal/permission"
+	"FFCode/internal/tool"
 )
 
 type subagentTestClient struct{}

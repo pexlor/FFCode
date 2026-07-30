@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate SWE-bench predictions as MyCode finishes each instance."""
+"""Evaluate SWE-bench predictions as FFCode finishes each instance."""
 
 import argparse
 import concurrent.futures
@@ -145,7 +145,7 @@ def parse_args():
     parser.add_argument("--report-dir", type=Path, default=Path("benchmark/swebench-lite-20260726/live-reports"))
     parser.add_argument("--dataset", default="SWE-bench/SWE-bench_Lite")
     parser.add_argument("--split", default="test")
-    parser.add_argument("--model-name", default="MyCode-MiniMax-M3")
+    parser.add_argument("--model-name", default="FFCode-MiniMax-M3")
     parser.add_argument("--run-prefix", default="mycode-live-20260727")
     parser.add_argument("--docker-host", default="unix:///Users/fengrui03/.docker/run/docker.sock")
     parser.add_argument("--timeout", type=int, default=1800)

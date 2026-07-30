@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	"FFCode/internal/conversation"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 var ErrContextBudgetExceeded = errors.New("context budget exceeded")

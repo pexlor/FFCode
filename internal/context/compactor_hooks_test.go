@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"MyCode/internal/hook"
+	"FFCode/internal/hook"
 )
 
 type compactHookStore struct {

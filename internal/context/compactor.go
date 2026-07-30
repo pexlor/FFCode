@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"MyCode/internal/hook"
+	"FFCode/internal/hook"
 )
 
 var ErrCompactHookRejected = errors.New("context compaction rejected by hook")

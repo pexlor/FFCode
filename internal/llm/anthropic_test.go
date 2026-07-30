@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 )
 
 func TestAnthropicStreamReturnsStructuredProviderError(t *testing.T) {

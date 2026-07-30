@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 )
 
 func TestValidateRawMemoryRequiresValidEvidence(t *testing.T) {

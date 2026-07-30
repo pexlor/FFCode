@@ -1,8 +1,8 @@
 package llm
 
 import (
-	"MyCode/internal/conversation"
-	"MyCode/internal/tool"
+	"FFCode/internal/conversation"
+	"FFCode/internal/tool"
 	"context"
 	"fmt"
 	"strings"

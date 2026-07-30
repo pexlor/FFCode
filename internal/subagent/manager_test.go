@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/agent"
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
+	"FFCode/internal/agent"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
 )
 
 type scriptedClient struct {

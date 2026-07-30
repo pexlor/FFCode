@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/llm"
+	"FFCode/internal/conversation"
+	"FFCode/internal/llm"
 )
 
 type ConsolidateRequest struct {

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"MyCode/internal/agent"
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
+	"FFCode/internal/agent"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
 )
 
 const maxEvidenceBytes = 4096

@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"MyCode/internal/hook"
-	"MyCode/internal/permission"
+	"FFCode/internal/hook"
+	"FFCode/internal/permission"
 )
 
 type recordingPermissionManager struct {

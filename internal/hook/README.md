@@ -1,6 +1,6 @@
 # Hook
 
-`internal/hook` implements bounded lifecycle hooks for MyCode. The public
+`internal/hook` implements bounded lifecycle hooks for FFCode. The public
 contract is defined by `Event`, `Input`, `Output`, `Handler`, `Dispatcher`, and
 `CommandSpec`.
 

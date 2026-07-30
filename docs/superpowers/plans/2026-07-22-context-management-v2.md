@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
-**目标：** 为 MyCode 实现本地持久化、按预算触发、不会重复压缩已覆盖消息的四级上下文管理。
+**目标：** 为 FFCode 实现本地持久化、按预算触发、不会重复压缩已覆盖消息的四级上下文管理。
 
 **架构：** `ConversationStore` 保存完整 transcript、工具 Artifact 和 active summary 检查点；`ContextManager` 每次从 active summary 的覆盖游标之后读取消息并构造 `ContextView`。按需加载每次装配，工具卸载在新结果超限时触发，旧结果淘汰在工具预算超限时触发，会话摘要只在整体达到软阈值且存在新增完整 Turn 时触发。
 

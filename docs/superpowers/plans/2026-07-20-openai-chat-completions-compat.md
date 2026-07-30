@@ -43,8 +43,8 @@ import (
 	"errors"
 	"testing"
 
-	"MyCode/internal/message"
-	"MyCode/internal/tool"
+	"FFCode/internal/message"
+	"FFCode/internal/tool"
 )
 
 func TestNewOpenAICompatClientRequiresModelName(t *testing.T) {

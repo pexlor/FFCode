@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/hook"
-	"MyCode/internal/permission"
+	"FFCode/internal/hook"
+	"FFCode/internal/permission"
 )
 
 type allowAllPermissions struct{}

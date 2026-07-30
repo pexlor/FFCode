@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/agent"
-	"MyCode/internal/llm"
+	"FFCode/internal/agent"
+	"FFCode/internal/llm"
 )
 
 func TestEncoderMapsAgentEventsToVersionOneProtocol(t *testing.T) {

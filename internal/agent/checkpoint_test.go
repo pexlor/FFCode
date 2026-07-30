@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	"FFCode/internal/conversation"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 type memoryCheckpointStore struct {

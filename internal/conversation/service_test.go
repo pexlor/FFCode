@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/hook"
+	"FFCode/internal/hook"
 )
 
 type serviceStore struct {
@@ -71,6 +71,28 @@ func TestResumeRestoresOnlyCompleteTurnsAndAddsBoundary(t *testing.T) {
 	}
 	if current.History[0].Content != "first" || !strings.Contains(current.History[1].Content, "context boundary") {
 		t.Fatalf("unexpected resumed history: %+v", current.History)
+	}
+}
+
+func TestResumeAcceptsDisplayedShortSessionID(t *testing.T) {
+	store := &serviceStore{metadata: SessionMetadata{
+		ID:        "session-cc06be1e0123456789abcdef01234567",
+		Title:     "test",
+		Workspace: "/workspace",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+	}}
+	service, err := NewService(store, "/workspace", SessionContext{SystemPrompt: "system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := service.Resume(context.Background(), "cc06be1e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != store.metadata.ID {
+		t.Fatalf("resumed session %q, want %q", current.ID, store.metadata.ID)
 	}
 }
 

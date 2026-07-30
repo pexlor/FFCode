@@ -1,7 +1,7 @@
 package skill
 
 import (
-	"MyCode/internal/tool"
+	"FFCode/internal/tool"
 	"context"
 	"fmt"
 	"strings"

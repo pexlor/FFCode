@@ -1,8 +1,8 @@
 package tool
 
 import (
-	"MyCode/internal/hook"
-	"MyCode/internal/permission"
+	"FFCode/internal/hook"
+	"FFCode/internal/permission"
 	"context"
 	"fmt"
 	"os"

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"MyCode/internal/llm"
-	"MyCode/internal/permission"
-	"MyCode/internal/tool"
+	"FFCode/internal/llm"
+	"FFCode/internal/permission"
+	"FFCode/internal/tool"
 )
 
 type blockingPermissionManager struct {

@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 	"encoding/json"
 	"fmt"
 	"sort"

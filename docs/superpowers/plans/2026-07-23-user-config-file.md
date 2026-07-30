@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 让 MyCode 从 `~/.ffcode/config.yaml` 加载模型、摘要模型和上下文配置，同时允许已有环境变量覆盖文件值。
+**目标：** 让 FFCode 从 `~/.ffcode/config.yaml` 加载模型、摘要模型和上下文配置，同时允许已有环境变量覆盖文件值。
 
 **架构：** 在 `internal/config` 中建立独立的配置加载边界，依次完成 YAML 解码、默认值、环境变量覆盖、校验和权限警告。REPL 只接收已解析的配置来组装运行时，并用最终配置显示欢迎信息，不再直接读取模型相关环境变量。
 
@@ -376,7 +376,7 @@ git commit -m "feat: support environment config overrides"
 package repl
 
 import (
-	"MyCode/internal/config"
+	"FFCode/internal/config"
 	"bytes"
 	"strings"
 	"testing"
@@ -413,7 +413,7 @@ func TestPrintWelcomeUsesConfiguredModel(t *testing.T) {
 修改 `internal/repl/ui.go`：
 
 ```go
-import appconfig "MyCode/internal/config"
+import appconfig "FFCode/internal/config"
 
 func runInteractive() {
 	cfg, err := appconfig.Load(os.Stderr)
@@ -501,7 +501,7 @@ func initAgent(cfg appconfig.Config) (*agentRuntime, error) {
 }
 
 func printWelcomeTo(out io.Writer, modelName string) {
-	fmt.Fprintln(out, colorCyan+"MyCode CLI"+colorReset)
+	fmt.Fprintln(out, colorCyan+"FFCode CLI"+colorReset)
 	fmt.Fprintf(out, "%smodel: %s | /help for commands | /exit to quit%s\n\n", colorDim, modelName, colorReset)
 }
 ```

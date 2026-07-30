@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"MyCode/internal/agent"
+	"FFCode/internal/agent"
 )
 
 var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;]*m`)

@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"MyCode/internal/hook"
+	"FFCode/internal/hook"
 )
 
 type hookTestTool struct {

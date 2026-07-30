@@ -27,7 +27,7 @@ PROMPT = (
 
 
 class ProtocolEventParser:
-    """Incrementally extracts terminal events from MyCode protocol v1 JSONL."""
+    """Incrementally extracts terminal events from FFCode protocol v1 JSONL."""
 
     def __init__(self):
         self.buffer = ""
@@ -285,7 +285,7 @@ def main():
         if args.agent == "codex":
             args.model_name = f"Codex-{args.model or 'default'}"
         else:
-            args.model_name = "MyCode-MiniMax-M3"
+            args.model_name = "FFCode-MiniMax-M3"
     args.root.mkdir(parents=True, exist_ok=True)
     for name in ("archives", "worktrees", "agent-logs", "patches"):
         (args.root / name).mkdir(exist_ok=True)

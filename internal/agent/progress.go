@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 const maxProgressGuidanceBytes = 640

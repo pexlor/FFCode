@@ -1,8 +1,8 @@
-# MyCode SWE-bench Lite 110-case 评测报告
+# FFCode SWE-bench Lite 110-case 评测报告
 
 ## 1. 报告说明
 
-本报告记录 MyCode 代码 Agent 在 2026-07-28 执行的一次 SWE-bench Lite 子集评测。Agent 共处理 110 个 case，其中 Astropy 6 个、Django 104 个。该批次不是 SWE-bench Lite 全量 300-case，因此 `81/110` 不能直接作为官方全量榜单成绩使用。
+本报告记录 FFCode 代码 Agent 在 2026-07-28 执行的一次 SWE-bench Lite 子集评测。Agent 共处理 110 个 case，其中 Astropy 6 个、Django 104 个。该批次不是 SWE-bench Lite 全量 300-case，因此 `81/110` 不能直接作为官方全量榜单成绩使用。
 
 报告依据以下运行产物生成：
 
@@ -31,7 +31,7 @@
 
 主要结论如下：
 
-1. MyCode 在该 110-case 子集上解决了 81 个问题，总体成功率为 73.6%。排除 1 个基础设施错误和 2 个空补丁后，有效评测通过率为 75.7%。
+1. FFCode 在该 110-case 子集上解决了 81 个问题，总体成功率为 73.6%。排除 1 个基础设施错误和 2 个空补丁后，有效评测通过率为 75.7%。
 2. 26 个 unresolved 补丁全部成功应用，说明主要瓶颈不是补丁格式、Git 操作或 Evaluator，而是补丁语义不完整。
 3. 失败集中在需求边界覆盖、兼容行为理解、修复层级选择，以及共享状态和协议不变量。
 4. Agent 的 6 个 timeout 中有 5 个补丁被 Evaluator 判定为 resolved。超时状态不能直接等同于修复失败，但暴露出 Agent 无法及时收尾的问题。

@@ -1,7 +1,7 @@
 package agent
 
 import (
-	contextmanager "MyCode/internal/context"
+	contextmanager "FFCode/internal/context"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/llm"
+	"FFCode/internal/conversation"
+	"FFCode/internal/llm"
 )
 
 const CheckpointFormatVersion = 1

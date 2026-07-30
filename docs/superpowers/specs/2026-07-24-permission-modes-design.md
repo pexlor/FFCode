@@ -2,7 +2,7 @@
 
 ## 背景与目标
 
-MyCode 已有统一的 Tool 权限入口、项目级工具策略、Workspace 路径边界、受保护路径、Shell 风险分析、用户确认和审计能力。当前应用没有面向用户的权限模式，默认策略也无法表达用户对交互频率的偏好。
+FFCode 已有统一的 Tool 权限入口、项目级工具策略、Workspace 路径边界、受保护路径、Shell 风险分析、用户确认和审计能力。当前应用没有面向用户的权限模式，默认策略也无法表达用户对交互频率的偏好。
 
 本次改动增加三档运行时权限模式：`full_access`、`auto_approve` 和 `ask`。用户可以在用户级配置文件中设置默认模式，通过启动选择器覆盖本次运行的模式，并在终端 UI 中查看或切换当前模式。
 
@@ -124,7 +124,7 @@ Agent 会并行执行同一批 Tool 调用。`TerminalConfirmer` 必须串行化
 新增启动参数：
 
 ```bash
-MyCode --choose-permissions
+FFCode --choose-permissions
 ```
 
 没有该参数时直接使用用户配置的默认模式，不显示选择器。存在该参数时，在创建 Agent 和 Tool Manager 前使用现有 Bubble Tea 技术栈显示三项选择器，默认选中配置文件中的模式：

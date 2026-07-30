@@ -1,7 +1,7 @@
 package terminal
 
 import (
-	session "MyCode/internal/conversation"
+	session "FFCode/internal/conversation"
 	"bufio"
 	"context"
 	"errors"

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 type budgetClient struct {

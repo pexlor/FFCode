@@ -184,13 +184,13 @@ List containers whose names start with `sweb.eval` and remove only containers be
 
 ```bash
 tmux -S /tmp/mycode-swe-tmux.sock new-session -d -s swe-evaluator \
-  -c /Users/fengrui03/Desktop/MyCode \
+  -c /Users/fengrui03/Desktop/FFCode \
   "python3 -u benchmark/swebench-lite-20260726/watch_evaluator.py \
   --agent-state /tmp/mycode-swe-full/agent-results.jsonl \
   --root /tmp/mycode-swe-full/evaluator-watch \
   --harness /tmp/swebench-harness.ImQnZk \
   --harness-python /tmp/swebench-harness.ImQnZk/.venv/bin/python \
-  --report-dir /Users/fengrui03/Desktop/MyCode/benchmark/swebench-lite-20260726/live-reports \
+  --report-dir /Users/fengrui03/Desktop/FFCode/benchmark/swebench-lite-20260726/live-reports \
   --run-prefix mycode-full-20260728 --expected 300 --poll-seconds 5 \
   --timeout 1800 --max-attempts 3 --retry-delay 30 --workers 5"
 ```

@@ -1,6 +1,6 @@
 # internal
 
-本目录保存 MyCode 的内部实现。Go 的 `internal` 规则会阻止仓库外部代码直接导入这些包。
+本目录保存 FFCode 的内部实现。Go 的 `internal` 规则会阻止仓库外部代码直接导入这些包。
 
 ## 分层
 

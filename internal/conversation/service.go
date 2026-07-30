@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"MyCode/internal/hook"
+	"FFCode/internal/hook"
 )
 
 const (
@@ -312,7 +312,7 @@ func (s *Service) resolve(ctx context.Context, prefix string) (SessionMetadata, 
 	}
 	var matches []SessionMetadata
 	for _, item := range items {
-		if strings.HasPrefix(item.ID, prefix) {
+		if strings.HasPrefix(item.ID, prefix) || strings.HasPrefix(strings.TrimPrefix(item.ID, "session-"), prefix) {
 			matches = append(matches, item)
 		}
 	}

@@ -49,6 +49,12 @@ func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) ToolResul
 
 	offset := intArg(args, "offset", 0)
 	limit := intArg(args, "limit", 2000)
+	if offset < 0 {
+		return toolError("offset must be non-negative")
+	}
+	if limit < 0 {
+		return toolError("limit must be non-negative")
+	}
 
 	info, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
@@ -70,9 +76,9 @@ func (t *ReadFileTool) Execute(_ context.Context, args map[string]any) ToolResul
 	if offset >= len(lines) {
 		return ToolResult{Output: ""}
 	}
-	end := offset + limit
-	if end > len(lines) {
-		end = len(lines)
+	end := len(lines)
+	if limit < len(lines)-offset {
+		end = offset + limit
 	}
 	selected := lines[offset:end]
 

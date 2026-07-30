@@ -48,6 +48,10 @@ func (l KnowledgeLoader) Load(activePaths []string) ([]KnowledgeDocument, error)
 		}
 		return nil, err
 	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
 
 	candidates := []string{}
 	seen := make(map[string]bool)
@@ -125,15 +129,16 @@ func (l KnowledgeLoader) loadFile(root, path string, stack []string, loaded *int
 	if !within(root, path) {
 		return "", fmt.Errorf("knowledge include outside workspace: %s", path)
 	}
-	for _, item := range stack {
-		if item == path {
-			return "", fmt.Errorf("knowledge include cycle: %s -> %s", strings.Join(stack, " -> "), path)
-		}
-	}
-	if err := rejectSymlink(root, path); err != nil {
+	resolvedPath, err := resolveKnowledgePath(root, path)
+	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(path)
+	for _, item := range stack {
+		if item == resolvedPath {
+			return "", fmt.Errorf("knowledge include cycle: %s -> %s", strings.Join(stack, " -> "), resolvedPath)
+		}
+	}
+	info, err := os.Stat(resolvedPath)
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +148,7 @@ func (l KnowledgeLoader) loadFile(root, path string, stack []string, loaded *int
 	if *loaded >= l.MaxFiles {
 		return "", fmt.Errorf("knowledge file count exceeds %d", l.MaxFiles)
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(resolvedPath)
 	if err != nil {
 		return "", err
 	}
@@ -170,8 +175,8 @@ func (l KnowledgeLoader) loadFile(root, path string, stack []string, loaded *int
 		if includeName == "" || filepath.IsAbs(includeName) {
 			return "", fmt.Errorf("invalid knowledge include %q in %s", includeName, path)
 		}
-		includePath := filepath.Clean(filepath.Join(filepath.Dir(path), includeName))
-		included, err := l.loadFile(root, includePath, append(stack, path), loaded, total)
+		includePath := filepath.Clean(filepath.Join(filepath.Dir(resolvedPath), includeName))
+		included, err := l.loadFile(root, includePath, append(stack, resolvedPath), loaded, total)
 		if err != nil {
 			return "", err
 		}
@@ -183,23 +188,19 @@ func (l KnowledgeLoader) loadFile(root, path string, stack []string, loaded *int
 	return builder.String(), nil
 }
 
-func rejectSymlink(root, path string) error {
-	relative, err := filepath.Rel(root, path)
+func resolveKnowledgePath(root, path string) (string, error) {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
-		return err
+		return "", err
 	}
-	current := root
-	for _, part := range strings.Split(relative, string(filepath.Separator)) {
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("knowledge path uses symlink: %s", current)
-		}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	if !within(resolvedRoot, resolvedPath) {
+		return "", fmt.Errorf("knowledge path resolves outside workspace: %s", path)
+	}
+	return resolvedPath, nil
 }
 
 func within(root, path string) bool {

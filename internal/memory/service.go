@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 )
 
 type TranscriptSource interface {

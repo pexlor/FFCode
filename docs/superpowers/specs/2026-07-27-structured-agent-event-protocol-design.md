@@ -6,7 +6,7 @@ Approved for implementation on 2026-07-27.
 
 ## Context
 
-MyCode already separates the Agent loop from terminal rendering through `AgentEvent`, but those events are internal Go values. Automated callers currently infer completion by parsing rendered terminal text such as `done: end_turn`. Terminal text is not a protocol: it contains ANSI control sequences, Markdown, translated status messages, arbitrary model text, and output chunks that may split markers.
+FFCode already separates the Agent loop from terminal rendering through `AgentEvent`, but those events are internal Go values. Automated callers currently infer completion by parsing rendered terminal text such as `done: end_turn`. Terminal text is not a protocol: it contains ANSI control sequences, Markdown, translated status messages, arbitrary model text, and output chunks that may split markers.
 
 The structured protocol is a general Agent capability. SWE-bench exposed the failure mode and will be one regression data source, but the design must support any interactive or automated caller.
 
@@ -29,7 +29,7 @@ The structured protocol is a general Agent capability. SWE-bench exposed the fai
 
 ## CLI Contract
 
-MyCode accepts a new option:
+FFCode accepts a new option:
 
 ```text
 --output-format text|jsonl

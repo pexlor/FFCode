@@ -228,6 +228,20 @@ mkdir -p ./bin
 go build -o ./bin/ffcode ./cmd/FFCode
 ```
 
+### 发布
+
+项目使用 GoReleaser 自动发布。创建并推送符合 `v*` 格式的标签即可触发
+GitHub Actions，构建 Linux、macOS 和 Windows 的 amd64/arm64 可执行文件，
+并自动生成压缩包、SHA-256 校验和与 GitHub Release：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+发布前会自动运行 `go test ./...`。完整发布配置见
+`.goreleaser.yaml` 和 `.github/workflows/release.yml`。
+
 修改并发、文件锁或后台 Worker 相关代码后，还应对对应包运行竞态检测，例如：
 
 ```bash

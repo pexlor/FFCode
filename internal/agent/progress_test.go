@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 func TestProgressTrackerWarnsThenBlocksUnchangedToolCall(t *testing.T) {

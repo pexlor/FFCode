@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 type retryResponse struct {

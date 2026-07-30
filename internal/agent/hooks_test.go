@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
-	"MyCode/internal/tool"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
+	"FFCode/internal/tool"
 )
 
 type lifecycleSessionStore struct {

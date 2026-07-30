@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 为 MyCode 增加“完全访问”“替我审批”“请求批准”三档权限模式，并支持用户配置、启动选择、运行时切换和 UI 状态展示。
+**目标：** 为 FFCode 增加“完全访问”“替我审批”“请求批准”三档权限模式，并支持用户配置、启动选择、运行时切换和 UI 状态展示。
 
 **架构：** 保留现有静态 `Policy` 作为工具、能力和路径硬边界，在 `permission.Manager` 中增加并发安全的动态 `Mode`，只用它决定 Safe、Low、High 风险的自动允许、自动拒绝或人工批准行为。`internal/app` 负责配置转换和依赖装配，终端通过最小控制器接口选择、显示和切换模式，所有 Tool 仍从原有统一权限入口执行。
 
@@ -361,7 +361,7 @@ type Options struct {
 }
 
 func parseOptions(arguments []string) (Options, error) {
-	flags := flag.NewFlagSet("MyCode", flag.ContinueOnError)
+	flags := flag.NewFlagSet("FFCode", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	workspace := flags.String("cwd", "", "workspace directory")
 	choose := flags.Bool("choose-permissions", false, "choose permissions for this run")
@@ -625,7 +625,7 @@ permission:
   mode: ask
 ```
 
-说明合法值为 `full_access`、`auto_approve`、`ask`；三档都保留 Workspace、受保护路径、项目 Policy 和 Critical 拦截。记录 `MyCode --choose-permissions`、`/permissions` 及三个切换参数。在 `TODO.md` 将第 3 项标记 `done`。
+说明合法值为 `full_access`、`auto_approve`、`ask`；三档都保留 Workspace、受保护路径、项目 Policy 和 Critical 拦截。记录 `FFCode --choose-permissions`、`/permissions` 及三个切换参数。在 `TODO.md` 将第 3 项标记 `done`。
 
 - [ ] **步骤 2：运行目标测试和竞态检测**
 

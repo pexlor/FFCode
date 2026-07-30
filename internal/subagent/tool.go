@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"MyCode/internal/agent"
-	"MyCode/internal/hook"
-	"MyCode/internal/tool"
+	"FFCode/internal/agent"
+	"FFCode/internal/hook"
+	"FFCode/internal/tool"
 )
 
 type Delegator interface {

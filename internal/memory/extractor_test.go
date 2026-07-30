@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/llm"
+	"FFCode/internal/conversation"
+	"FFCode/internal/llm"
 )
 
 type fakeLLM struct {

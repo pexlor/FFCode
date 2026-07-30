@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
-**目标：** 为 MyCode 实现可恢复会话、项目知识加载、自动记忆抽取与整合，并把受预算约束的长期记忆注入模型上下文。
+**目标：** 为 FFCode 实现可恢复会话、项目知识加载、自动记忆抽取与整合，并把受预算约束的长期记忆注入模型上下文。
 
 **架构：** 保留 `fileconversation` 作为 Transcript 事实源，新增 `memory` 领域包和 `filememory` 文件后端。后台 Service 使用 Phase 1 会话抽取和 Phase 2 全局整合，`ContextManager` 只通过只读 SummaryProvider 消费已生效摘要。
 

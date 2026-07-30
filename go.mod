@@ -1,4 +1,4 @@
-module MyCode
+module FFCode
 
 go 1.25.8
 

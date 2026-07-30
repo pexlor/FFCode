@@ -1,8 +1,8 @@
-# MyCode Agent 问题分析报告
+# FFCode Agent 问题分析报告
 
 ## 1. 报告概述
 
-- **评估对象：** MyCode 代码 Agent
+- **评估对象：** FFCode 代码 Agent
 - **数据集：** SWE-bench Lite
 - **样本规模：** 已执行 50 个 case
 - **Agent 并发数：** 6
@@ -13,13 +13,13 @@
 - **补丁目录：** `/tmp/mycode-swe-full/patches/`
 - **Evaluator 状态文件：** `/tmp/mycode-swe-full/evaluator-watch/evaluation-results.jsonl`
 
-本报告分析 MyCode 在前 50 个 SWE-bench Lite case 中暴露的问题。报告重点关注 Agent 的任务完成能力、补丁产出能力、运行稳定性和结果统计准确性。
+本报告分析 FFCode 在前 50 个 SWE-bench Lite case 中暴露的问题。报告重点关注 Agent 的任务完成能力、补丁产出能力、运行稳定性和结果统计准确性。
 
 当前 50 个样本由 5 个 Astropy case 和 45 个 Django case 组成，并非从 300 个 case 中随机抽样。因此，本报告适合诊断工程问题，不适合直接推断完整 SWE-bench Lite 成绩。
 
 ## 2. 核心结论
 
-MyCode 已表现出较强的补丁生成能力，但任务收敛和运行控制存在明显问题：
+FFCode 已表现出较强的补丁生成能力，但任务收敛和运行控制存在明显问题：
 
 1. **补丁产出率较高。** 50 个 case 中有 44 个生成非空补丁，补丁产出率为 88%。
 2. **严格完成率偏低。** 表面上有 34 个 `completed`，但只有 30 个收到正式的 `done: end_turn`，严格完成率为 60%。
@@ -193,7 +193,7 @@ Runner 在每个 case 结束后删除 worktree，只保留补丁和终端日志�
 
 ### 4.7 P2：当前 50-case 样本不具代表性
 
-本次运行按任务文件顺序处理，前 50 个样本中 Django 占 90%。该结果适合发现 Runner 和 Agent 工作流问题，但不能代表 MyCode 在 SWE-bench Lite 全部仓库上的整体能力。
+本次运行按任务文件顺序处理，前 50 个样本中 Django 占 90%。该结果适合发现 Runner 和 Agent 工作流问题，但不能代表 FFCode 在 SWE-bench Lite 全部仓库上的整体能力。
 
 后续小规模实验应采用固定随机种子或按仓库分层抽样，避免优化只针对 Django 生效。
 
@@ -327,7 +327,7 @@ timeout:wall_clock
 
 ## 9. 总结
 
-MyCode 当前的主要短板不是无法生成修复，而是运行控制和结果分类：
+FFCode 当前的主要短板不是无法生成修复，而是运行控制和结果分类：
 
 - 44/50 个 case 已生成补丁，说明基础修复能力具备可用性；
 - 13 个 timeout 中有 10 个保留了补丁，说明 Agent 经常无法及时停止；

@@ -1,8 +1,8 @@
 package subagent
 
 import (
-	"MyCode/internal/agent"
-	"MyCode/internal/llm"
+	"FFCode/internal/agent"
+	"FFCode/internal/llm"
 )
 
 type Status string

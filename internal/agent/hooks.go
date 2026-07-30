@@ -1,14 +1,14 @@
 package agent
 
 import (
-	contextmanager "MyCode/internal/context"
+	contextmanager "FFCode/internal/context"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
 
-	"MyCode/internal/conversation"
-	"MyCode/internal/hook"
+	"FFCode/internal/conversation"
+	"FFCode/internal/hook"
 )
 
 var (

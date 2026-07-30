@@ -1,12 +1,12 @@
 package agent
 
 import (
-	contextmanager "MyCode/internal/context"
-	"MyCode/internal/conversation"
-	"MyCode/internal/hook"
-	"MyCode/internal/llm"
-	"MyCode/internal/skill"
-	"MyCode/internal/tool"
+	contextmanager "FFCode/internal/context"
+	"FFCode/internal/conversation"
+	"FFCode/internal/hook"
+	"FFCode/internal/llm"
+	"FFCode/internal/skill"
+	"FFCode/internal/tool"
 	"context"
 	"errors"
 	"fmt"

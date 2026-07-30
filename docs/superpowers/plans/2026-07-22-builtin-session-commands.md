@@ -2,7 +2,7 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 为 MyCode REPL 增加可持久化的新建、列出、恢复、删除、重命名和查看当前会话命令。
+**目标：** 为 FFCode REPL 增加可持久化的新建、列出、恢复、删除、重命名和查看当前会话命令。
 
 **架构：** 在 `internal/context` 的文件 Store 上增加会话 metadata 生命周期，在独立的 `internal/session` 服务中维护当前会话，再由 `internal/repl` 的命令注册表进行解析和展示。Agent 增加可切换 Session ID 的安全入口，恢复时从 transcript 重建 `MessageManager`。
 

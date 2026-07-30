@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"MyCode/internal/conversation"
+	"FFCode/internal/conversation"
 )
 
 const (
