@@ -1,7 +1,7 @@
 package main
 
 import (
-	"MyCode/internal/app"
+	"FFCode/internal/app"
 	"os"
 )
 
