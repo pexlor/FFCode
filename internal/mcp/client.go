@@ -102,7 +102,7 @@ func Start(ctx context.Context, name string, config ServerConfig) (*Client, erro
 	if err := c.request(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]string{"name": "MyCode", "version": "0.1.0"},
+		"clientInfo":      map[string]string{"name": "FFCode", "version": "0.1.0"},
 	}, &initialized); err != nil {
 		c.Close()
 		return nil, err

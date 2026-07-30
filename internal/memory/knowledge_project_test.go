@@ -15,7 +15,7 @@ func TestProjectAgentFilesLoadByActivePath(t *testing.T) {
 	if len(documents) != 2 {
 		t.Fatalf("expected root and memory rules, got %d: %+v", len(documents), documents)
 	}
-	if !strings.HasSuffix(documents[0].Path, filepath.Join("MyCode", "AGENTS.md")) && !strings.HasSuffix(documents[0].Path, "AGENTS.md") {
+	if !strings.HasSuffix(documents[0].Path, filepath.Join("FFCode", "AGENTS.md")) && !strings.HasSuffix(documents[0].Path, "AGENTS.md") {
 		t.Fatalf("first document is not the project rule: %+v", documents)
 	}
 	if !strings.Contains(documents[0].Content, "go test ./...") {

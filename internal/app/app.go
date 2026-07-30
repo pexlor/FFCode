@@ -27,7 +27,7 @@ func Run(arguments []string, stdout, stderr io.Writer, version string) int {
 				fmt.Fprintf(stderr, "error: %v\n", err)
 				return 2
 			}
-			fmt.Fprintf(stdout, "MyCode %s\n", version)
+			fmt.Fprintf(stdout, "FFCode %s\n", version)
 			return 0
 		}
 	}

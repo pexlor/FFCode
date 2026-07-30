@@ -100,8 +100,8 @@ func NewDefaultCommandRegistry() (*CommandRegistry, error) {
 		{Name: "current", Usage: "/current", Description: "显示当前会话", Run: runCurrent},
 		{Name: "thinking", Usage: "/thinking [off|minimal|low|medium|high|xhigh|status]", Description: "查看或调整后续回复的思考强度", Run: runThinking},
 		{Name: "clear", Usage: "/clear", Description: "清理屏幕但保留上下文", Run: runClear},
-		{Name: "exit", Usage: "/exit", Description: "退出 MyCode", Run: func(context.Context, *CommandContext, string) CommandResult { return CommandResult{Quit: true} }},
-		{Name: "quit", Usage: "/quit", Description: "退出 MyCode", Run: func(context.Context, *CommandContext, string) CommandResult { return CommandResult{Quit: true} }},
+		{Name: "exit", Usage: "/exit", Description: "退出 FFCode", Run: func(context.Context, *CommandContext, string) CommandResult { return CommandResult{Quit: true} }},
+		{Name: "quit", Usage: "/quit", Description: "退出 FFCode", Run: func(context.Context, *CommandContext, string) CommandResult { return CommandResult{Quit: true} }},
 	}
 	for _, command := range commands {
 		if err := registry.Register(command); err != nil {

@@ -22,7 +22,7 @@ func parseWorkspaceOption(arguments []string) (string, error) {
 }
 
 func parseOptions(arguments []string) (Options, error) {
-	flags := flag.NewFlagSet("MyCode", flag.ContinueOnError)
+	flags := flag.NewFlagSet("FFCode", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", "", "workspace directory")
 	outputFormat := flags.String("output-format", OutputText, "output format: text or jsonl")
@@ -46,15 +46,15 @@ func validateStandaloneOption(arguments []string, name string) error {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, `MyCode - terminal coding assistant
+	fmt.Fprint(out, `FFCode - terminal coding assistant
 
 Usage:
-  MyCode [option]
-  MyCode --cwd <directory> [--output-format text|jsonl]
+  FFCode [option]
+  FFCode --cwd <directory> [--output-format text|jsonl]
 
 Options:
   -h, --help       Show this help message
-  -v, --version    Show the MyCode version
+  -v, --version    Show the FFCode version
       --cwd <dir>  Use an explicit workspace directory
       --output-format <format>
                    Output format: text (default) or jsonl
