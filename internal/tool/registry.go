@@ -1,6 +1,9 @@
 package tool
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 // Registry owns tool discovery and schema publication. Execution and
 // authorization are deliberately handled by ToolsManager.
@@ -30,9 +33,14 @@ func (r *Registry) Schemas() []*ToolSchema {
 	if r == nil {
 		return nil
 	}
-	schemas := make([]*ToolSchema, 0, len(r.tools))
-	for _, registered := range r.tools {
-		schemas = append(schemas, registered.Schema())
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	schemas := make([]*ToolSchema, 0, len(names))
+	for _, name := range names {
+		schemas = append(schemas, r.tools[name].Schema())
 	}
 	return schemas
 }

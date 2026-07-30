@@ -8,7 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
@@ -111,7 +112,7 @@ func (input *terminalLineInput) remember(value string) {
 }
 
 type promptModel struct {
-	input     textinput.Model
+	input     textarea.Model
 	registry  *CommandRegistry
 	hints     []commandHint
 	selected  int
@@ -122,21 +123,28 @@ type promptModel struct {
 	history   []string
 	historyAt int
 	draft     string
-	viewStart int
-	viewEnd   int
 }
 
 func newPromptModel(prompt string, registry *CommandRegistry, histories ...[]string) promptModel {
-	input := textinput.New()
+	input := textarea.New()
 	input.Prompt = prompt
+	input.ShowLineNumbers = false
+	input.DynamicHeight = true
+	input.MinHeight = 1
+	input.MaxHeight = 8
+	input.MaxContentHeight = 10_000
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+enter"))
 	styles := input.Styles()
 	styles.Focused.Prompt = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
 	styles.Focused.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+	styles.Focused.CursorLine = lipgloss.NewStyle()
 	styles.Cursor.Color = lipgloss.Color("14")
 	input.SetStyles(styles)
 	// A real terminal cursor allows macOS and other system IMEs to anchor
 	// their candidate window at the actual insertion point.
 	input.SetVirtualCursor(false)
+	input.SetHeight(1)
+	input.SetWidth(max(12, 100-lipgloss.Width(prompt)-1))
 	input.Focus()
 	var history []string
 	if len(histories) > 0 {
@@ -151,7 +159,6 @@ func (model promptModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := message.(tea.WindowSizeMsg); ok {
 		model.width = size.Width
 		model.input.SetWidth(max(12, size.Width-lipgloss.Width(model.input.Prompt)-1))
-		model.syncInputViewport()
 	}
 
 	if key, ok := message.(tea.KeyPressMsg); ok {
@@ -166,14 +173,12 @@ func (model promptModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				if commandRequiresArguments(hint) {
 					model.input.SetValue(value + " ")
 					model.input.CursorEnd()
-					model.syncInputViewport()
 					model.dismissed = true
 					model.hints = nil
 					return model, nil
 				}
 				model.input.SetValue(value)
 				model.input.CursorEnd()
-				model.syncInputViewport()
 			}
 			model.submitted = true
 			return model, tea.Quit
@@ -186,7 +191,7 @@ func (model promptModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.selected = (model.selected - 1 + len(model.hints)) % len(model.hints)
 				return model, nil
 			}
-			if model.recallHistory(-1) {
+			if model.atFirstVisualLine() && model.recallHistory(-1) {
 				return model, nil
 			}
 		case "down":
@@ -194,14 +199,13 @@ func (model promptModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.selected = (model.selected + 1) % len(model.hints)
 				return model, nil
 			}
-			if model.recallHistory(1) {
+			if model.atLastVisualLine() && model.recallHistory(1) {
 				return model, nil
 			}
 		case "tab":
 			if len(model.hints) > 0 {
 				model.input.SetValue("/" + model.hints[model.selected].Name)
 				model.input.CursorEnd()
-				model.syncInputViewport()
 				model.dismissed = false
 				model.refreshHints()
 				return model, nil
@@ -212,7 +216,6 @@ func (model promptModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	previous := model.input.Value()
 	var command tea.Cmd
 	model.input, command = model.input.Update(message)
-	model.syncInputViewport()
 	if model.input.Value() != previous {
 		model.historyAt = -1
 		model.dismissed = false
@@ -224,6 +227,16 @@ func (model promptModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func commandRequiresArguments(hint commandHint) bool {
 	return strings.Contains(strings.TrimSpace(hint.Usage), " ")
+}
+
+func (model promptModel) atFirstVisualLine() bool {
+	line := model.input.LineInfo()
+	return model.input.Line() == 0 && line.RowOffset == 0
+}
+
+func (model promptModel) atLastVisualLine() bool {
+	line := model.input.LineInfo()
+	return model.input.Line() == model.input.LineCount()-1 && line.RowOffset == line.Height-1
 }
 
 // recallHistory returns true when the key was consumed. A fresh draft is kept
@@ -249,7 +262,6 @@ func (model *promptModel) recallHistory(direction int) bool {
 			model.historyAt = -1
 			model.input.SetValue(model.draft)
 			model.input.CursorEnd()
-			model.syncInputViewport()
 			model.dismissed = true
 			model.hints = nil
 			return true
@@ -257,7 +269,6 @@ func (model *promptModel) recallHistory(direction int) bool {
 	}
 	model.input.SetValue(model.history[model.historyAt])
 	model.input.CursorEnd()
-	model.syncInputViewport()
 	model.dismissed = true
 	model.hints = nil
 	return true
@@ -286,7 +297,7 @@ func (model promptModel) View() tea.View {
 	view.WriteString(model.input.View())
 	if len(model.hints) == 0 {
 		result := tea.NewView(view.String())
-		result.Cursor = model.inputCursor()
+		result.Cursor = model.input.Cursor()
 		return result
 	}
 	view.WriteByte('\n')
@@ -313,61 +324,8 @@ func (model promptModel) View() tea.View {
 	view.WriteString("\n")
 	view.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  ↑↓ 选择 · Enter 确认 · Tab 补全 · Esc 收起"))
 	result := tea.NewView(view.String())
-	result.Cursor = model.inputCursor()
+	result.Cursor = model.input.Cursor()
 	return result
-}
-
-func (model promptModel) inputCursor() *tea.Cursor {
-	cursor := model.input.Cursor()
-	if cursor == nil {
-		return nil
-	}
-	runes := []rune(model.input.Value())
-	position := min(max(model.input.Position(), model.viewStart), len(runes))
-	start := min(max(model.viewStart, 0), position)
-	cursor.Position.X = lipgloss.Width(model.input.Prompt) + lipgloss.Width(string(runes[start:position]))
-	return cursor
-}
-
-// syncInputViewport mirrors textinput's horizontal viewport bookkeeping so
-// the real cursor can be positioned using terminal cell width instead of rune
-// count. CJK characters occupy two cells and are the main reason the upstream
-// cursor position drifts while composing text.
-func (model *promptModel) syncInputViewport() {
-	value := []rune(model.input.Value())
-	width := model.input.Width()
-	if width <= 0 || lipgloss.Width(string(value)) <= width {
-		model.viewStart = 0
-		model.viewEnd = len(value)
-		return
-	}
-	model.viewEnd = min(model.viewEnd, len(value))
-	position := model.input.Position()
-	if position < model.viewStart {
-		model.viewStart = position
-		used := 0
-		index := 0
-		visible := value[model.viewStart:]
-		for index < len(visible) && used <= width {
-			used += lipgloss.Width(string(visible[index]))
-			if used <= width+1 {
-				index++
-			}
-		}
-		model.viewEnd = model.viewStart + index
-	} else if position >= model.viewEnd {
-		model.viewEnd = position
-		used := 0
-		visible := value[:model.viewEnd]
-		index := len(visible) - 1
-		for index > 0 && used < width {
-			used += lipgloss.Width(string(visible[index]))
-			if used <= width {
-				index--
-			}
-		}
-		model.viewStart = model.viewEnd - (len(visible) - 1 - index)
-	}
 }
 
 var _ lineInput = (*terminalLineInput)(nil)

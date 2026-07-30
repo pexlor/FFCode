@@ -6,12 +6,31 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"FFCode/internal/agent"
 )
 
 var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *synchronizedBuffer) Write(value []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(value)
+}
+
+func (buffer *synchronizedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
 
 func TestAssistantLabelAndFirstTextRenderOnSameLine(t *testing.T) {
 	var status bytes.Buffer
@@ -42,6 +61,66 @@ func TestTurnEndEventRendersStableCompletionStatus(t *testing.T) {
 	plain := ansiSequence.ReplaceAllString(status.String(), "")
 	if !strings.Contains(plain, "done: end_turn") {
 		t.Fatalf("status = %q", plain)
+	}
+}
+
+func TestAgentEventRendererStatusIncludesElapsedTime(t *testing.T) {
+	var status bytes.Buffer
+	renderer := newAgentEventRenderer(&status, &bytes.Buffer{})
+
+	renderer.showStatus(conversationStatus("正在思考"))
+
+	plain := ansiSequence.ReplaceAllString(status.String(), "")
+	if !strings.Contains(plain, "正在思考") || !strings.Contains(plain, "0s") {
+		t.Fatalf("status = %q, want state and elapsed time", plain)
+	}
+}
+
+func TestAgentEventRendererTurnEndIncludesFinalElapsedTime(t *testing.T) {
+	var status bytes.Buffer
+	renderer := newAgentEventRenderer(&status, &bytes.Buffer{})
+	renderer.setElapsed(18*time.Second + 350*time.Millisecond)
+
+	if err := renderer.render(agent.TurnEndEvent{Status: agent.TurnCompleted, StopReason: agent.StopEndTurn}); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := ansiSequence.ReplaceAllString(status.String(), "")
+	if !strings.Contains(plain, "elapsed: 18.4s") {
+		t.Fatalf("status = %q, want final elapsed time", plain)
+	}
+}
+
+func TestConsumeAgentEventsRefreshesElapsedWithoutAgentEvent(t *testing.T) {
+	events := make(chan agent.AgentEvent, 1)
+	events <- agent.ThinkingStartEvent{}
+	interrupts := make(chan os.Signal)
+	status := &synchronizedBuffer{}
+	done := make(chan struct{})
+
+	go func() {
+		consumeAgentEvents(events, interrupts, func() {}, newAgentEventRenderer(status, &bytes.Buffer{}))
+		close(done)
+	}()
+
+	deadline := time.NewTimer(1500 * time.Millisecond)
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	defer poll.Stop()
+	for {
+		select {
+		case <-poll.C:
+			plain := ansiSequence.ReplaceAllString(status.String(), "")
+			if strings.Contains(plain, "正在思考") && strings.Contains(plain, "1s") {
+				close(events)
+				<-done
+				return
+			}
+		case <-deadline.C:
+			close(events)
+			<-done
+			t.Fatalf("status never refreshed elapsed time: %q", ansiSequence.ReplaceAllString(status.String(), ""))
+		}
 	}
 }
 

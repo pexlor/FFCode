@@ -110,6 +110,14 @@ func (a *Agent) saveCheckpoint(ctx context.Context, conversationContext *context
 	if a.CheckpointStore == nil {
 		return nil
 	}
+	fingerprint := workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace)
+	return a.saveCheckpointWithFingerprint(ctx, conversationContext, boundary, pending, completedIDs, completed, fingerprint)
+}
+
+func (a *Agent) saveCheckpointWithFingerprint(ctx context.Context, conversationContext *contextmanager.ConversationContext, boundary CheckpointBoundary, pending []llm.ToolCallComplete, completedIDs []string, completed bool, fingerprint string) error {
+	if a.CheckpointStore == nil {
+		return nil
+	}
 	pendingUses := make([]conversation.ToolUseBlock, 0, len(pending))
 	for _, call := range pending {
 		pendingUses = append(pendingUses, conversation.ToolUseBlock{ToolUseID: call.ToolID, ToolName: call.ToolName, Arguments: cloneArguments(call.Arguments)})
@@ -120,7 +128,7 @@ func (a *Agent) saveCheckpoint(ctx context.Context, conversationContext *context
 		Boundary:             boundary,
 		Completed:            completed,
 		Workspace:            conversationContext.Workspace,
-		WorkspaceFingerprint: workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace),
+		WorkspaceFingerprint: fingerprint,
 		History:              cloneHistory(conversationContext.History),
 		PendingToolUses:      pendingUses,
 		CompletedToolUseIDs:  append([]string(nil), completedIDs...),

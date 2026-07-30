@@ -25,6 +25,8 @@
 21. 系统提示词上移
 22. token估算优化（利用每次调用llm api返回的token + 每次新增文本的 toekn 进行较为精确的估算）
 23. 压缩窗口优化（保留系统提示词、早期关键上下文、最新上下文，把中间历史压缩）
+24. 输入支持 ctrl + 回车 换行
+25. 前置提示增加信息
 
 # 模块功能实现
 1. 长期记忆 done
@@ -64,6 +66,9 @@ tokens: input 0 | output 0 | total 0
 failed: agent_error
 
 执行失败: knowledge path uses symlink: /Users/fengrui03/Code/nova-go-ebcc/nova-go/AGENTS.md
+
+3. › /sessions
+命令失败: load session session-69e3f84cadea54b87a2c62ba: session not found
 
 # Agent 核心能力优化
 ## 运行时可靠性
@@ -126,3 +131,7 @@ Session 持久化记录“发生过什么”，检查点记录“任务做到哪
 3. API 报 context overflow
 4. 压缩多次会降低质量
 
+# 性能优化
+## 对比codex在针对同一个问题时慢很多
+可能点分析：
+1. 

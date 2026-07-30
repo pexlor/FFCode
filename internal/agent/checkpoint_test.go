@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,12 @@ type memoryCheckpointStore struct {
 
 type checkpointCountingTool struct{ calls atomic.Int32 }
 
+type countingFingerprinter struct{ calls atomic.Int32 }
+
+func (f *countingFingerprinter) Fingerprint(context.Context, string) (string, error) {
+	return fmt.Sprintf("fingerprint-%d", f.calls.Add(1)), nil
+}
+
 func (t *checkpointCountingTool) Name() string        { return "WriteFile" }
 func (t *checkpointCountingTool) Description() string { return "write" }
 func (t *checkpointCountingTool) Schema() *tool.ToolSchema {
@@ -32,6 +39,38 @@ func (t *checkpointCountingTool) Schema() *tool.ToolSchema {
 func (t *checkpointCountingTool) Execute(context.Context, map[string]any) tool.ToolResult {
 	t.calls.Add(1)
 	return tool.ToolResult{Output: "written"}
+}
+
+func TestAgentReusesWorkspaceFingerprintAtCheckpointBoundaries(t *testing.T) {
+	store := &memoryCheckpointStore{}
+	client := &phaseClient{responses: [][]llm.StreamEvent{
+		{
+			llm.ToolCallComplete{ToolID: "write-1", ToolName: "WriteFile"},
+			llm.StreamEnd{StopReason: "tool_calls"},
+		},
+		{llm.StreamEnd{StopReason: "end_turn"}},
+	}}
+	manager := tool.NewToolsManager()
+	manager.SetPermissionManager(allowPermissionManager{})
+	manager.RegisterTool(&checkpointCountingTool{})
+	runner, err := NewAgent(context.Background(), client, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprinter := &countingFingerprinter{}
+	runner.ProgressFingerprinter = fingerprinter
+	runner.CheckpointStore = store
+	session := testSession()
+	session.Workspace = t.TempDir()
+
+	terminal := terminalEvent(runner.RunContextWithBudget(context.Background(), session, RunBudget{}))
+
+	if terminal.Status != TurnCompleted {
+		t.Fatalf("terminal = %+v", terminal)
+	}
+	if got := fingerprinter.calls.Load(); got != 3 {
+		t.Fatalf("fingerprint calls = %d, want 3", got)
+	}
 }
 
 func (s *memoryCheckpointStore) Load(context.Context, string) (RunCheckpoint, error) {

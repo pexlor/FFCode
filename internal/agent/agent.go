@@ -368,19 +368,19 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, conversationContext *c
 				ThinkingBlocks: thinkingBlocks,
 				ToolUses:       toToolUseBlocks(toolCalls),
 			})
-			if err := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointModel, toolCalls, nil, false); err != nil {
+			if err := a.saveCheckpointWithFingerprint(ctx, conversationContext, CheckpointModel, toolCalls, nil, false, workspaceBefore); err != nil {
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
 
 			toolResults, postHookErr := a.executeToolsWithBlocked(ctx, toolCalls, blocked, agentEventCh)
 			conversationContext.History = append(conversationContext.History, conversation.Message{Role: conversation.TOOL, ToolResults: toolResults})
-			checkpointErr := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointTools, nil, completedToolIDs(toolCalls), false)
+			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace)
+			checkpointErr := a.saveCheckpointWithFingerprint(ctx, conversationContext, CheckpointTools, nil, completedToolIDs(toolCalls), false, workspaceAfter)
 			if err := errors.Join(postHookErr, checkpointErr); err != nil {
 				finish(turnEndFromError(err, budgetState.usage))
 				return
 			}
-			workspaceAfter := workspaceFingerprint(ctx, fingerprinter, conversationContext.Workspace)
 			executedCalls, executedResults := progressInputs(toolCalls, toolResults, blocked)
 			emitPhaseTransition(ctx, agentEventCh, phaseController.observe(
 				evidenceCoordinator.AfterTools(ctx, conversationContext.Workspace, executedCalls, executedResults),
@@ -397,7 +397,7 @@ func (a *Agent) RunContextWithBudget(ctx context.Context, conversationContext *c
 				case ProgressFinalize:
 					emitPhaseTransition(ctx, agentEventCh, phaseController.transition(PhaseFinalize, PhaseReasonNoProgress))
 				case ProgressStop:
-					if err := a.saveCheckpoint(ctx, conversationContext, fingerprinter, CheckpointCompleted, nil, completedToolIDs(toolCalls), true); err != nil {
+					if err := a.saveCheckpointWithFingerprint(ctx, conversationContext, CheckpointCompleted, nil, completedToolIDs(toolCalls), true, workspaceAfter); err != nil {
 						finish(turnEndFromError(err, budgetState.usage))
 						return
 					}

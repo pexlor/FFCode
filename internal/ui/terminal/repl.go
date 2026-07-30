@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"charm.land/glamour/v2"
 	"charm.land/glamour/v2/styles"
@@ -96,13 +97,14 @@ func Run(runtime Runtime) error {
 			printError("创建上下文失败", err)
 			continue
 		}
+		startedAt := time.Now()
 		events := runtime.Runner.RunContext(turnContext, conversationContext)
-		interrupted, failed := consumeAgentEvents(events, interrupts, cancelTurn, renderer)
+		interrupted, failed := consumeAgentEventsSince(events, interrupts, cancelTurn, renderer, startedAt)
 		cancelTurn()
 		if interrupted {
 			renderer.clearStatus()
 			renderer.finishThinking()
-			fmt.Fprintln(os.Stderr, dim("  对话已中断"))
+			fmt.Fprintf(os.Stderr, "%s  对话已中断 · elapsed: %s%s\n", colorDim, formatElapsed(renderer.elapsed), colorReset)
 			continue
 		}
 		if failed {
@@ -117,14 +119,31 @@ func consumeAgentEvents(
 	cancelTurn func(),
 	renderer *agentEventRenderer,
 ) (interrupted bool, failed bool) {
+	return consumeAgentEventsSince(events, interrupts, cancelTurn, renderer, time.Now())
+}
+
+func consumeAgentEventsSince(
+	events <-chan agent.AgentEvent,
+	interrupts <-chan os.Signal,
+	cancelTurn func(),
+	renderer *agentEventRenderer,
+	startedAt time.Time,
+) (interrupted bool, failed bool) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	renderer.setElapsed(0)
 	for {
 		select {
 		case <-interrupts:
+			renderer.setElapsed(time.Since(startedAt))
 			if !interrupted {
 				cancelTurn()
 				interrupted = true
 			}
+		case tickedAt := <-ticker.C:
+			renderer.setElapsed(tickedAt.Sub(startedAt))
 		case event, ok := <-events:
+			renderer.recordElapsed(time.Since(startedAt))
 			if !ok {
 				return interrupted, false
 			}
@@ -150,6 +169,9 @@ type agentEventRenderer struct {
 	statusOut        io.Writer
 	textOut          io.Writer
 	statusVisible    bool
+	currentStatus    string
+	elapsed          time.Duration
+	loopFinished     bool
 	thinkingVisible  bool
 	assistantStarted bool
 	thinking         strings.Builder
@@ -211,6 +233,7 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 			fmt.Fprintf(renderer.statusOut, "%s  - %s%s\n", colorDim, evidence, colorReset)
 		}
 	case agent.TurnEndEvent:
+		renderer.loopFinished = true
 		renderer.clearStatus()
 		renderer.finishThinking()
 		renderer.renderAssistantMarkdown()
@@ -227,6 +250,7 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 			return fmt.Errorf("turn %s: %s", ev.Status, ev.StopReason)
 		}
 	case agent.DoneEvent:
+		renderer.loopFinished = true
 		renderer.clearStatus()
 		renderer.finishThinking()
 		renderer.renderAssistantMarkdown()
@@ -237,6 +261,7 @@ func (renderer *agentEventRenderer) render(event agent.AgentEvent) error {
 			fmt.Fprintln(renderer.statusOut)
 		}
 	case agent.ErrorEvent:
+		renderer.loopFinished = true
 		return ev.Err
 	}
 	return nil
@@ -247,6 +272,7 @@ func (renderer *agentEventRenderer) renderUsage(usage llm.UsageInfo) {
 	if usage.CacheReadTokens > 0 {
 		fmt.Fprintf(renderer.statusOut, " | cache read %d", usage.CacheReadTokens)
 	}
+	fmt.Fprintf(renderer.statusOut, " | elapsed: %s", formatElapsed(renderer.elapsed))
 	fmt.Fprint(renderer.statusOut, colorReset)
 }
 
@@ -274,8 +300,22 @@ func (renderer *agentEventRenderer) renderAssistantMarkdown() {
 
 func (renderer *agentEventRenderer) showStatus(status string) {
 	renderer.clearStatus()
-	fmt.Fprintf(renderer.statusOut, "\r\033[2K%s%s%s", colorDim, status, colorReset)
+	renderer.currentStatus = status
+	fmt.Fprintf(renderer.statusOut, "\r\033[2K%s%s · %ds%s", colorDim, status, renderer.elapsed/time.Second, colorReset)
 	renderer.statusVisible = true
+}
+
+func (renderer *agentEventRenderer) setElapsed(elapsed time.Duration) {
+	renderer.recordElapsed(elapsed)
+	if renderer.currentStatus != "" {
+		renderer.showStatus(renderer.currentStatus)
+	} else if !renderer.loopFinished {
+		renderer.showStatus(conversationStatus("运行中"))
+	}
+}
+
+func (renderer *agentEventRenderer) recordElapsed(elapsed time.Duration) {
+	renderer.elapsed = max(elapsed, 0)
 }
 
 func (renderer *agentEventRenderer) clearStatus() {
@@ -283,6 +323,11 @@ func (renderer *agentEventRenderer) clearStatus() {
 		fmt.Fprint(renderer.statusOut, "\r\033[2K")
 		renderer.statusVisible = false
 	}
+	renderer.currentStatus = ""
+}
+
+func formatElapsed(elapsed time.Duration) string {
+	return max(elapsed, 0).Round(100 * time.Millisecond).String()
 }
 
 func (renderer *agentEventRenderer) finishThinking() {
