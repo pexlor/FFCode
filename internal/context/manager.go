@@ -2,6 +2,8 @@ package contextmanager
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -89,9 +91,14 @@ type ContextManager struct {
 // complete view for every tool-loop iteration.
 type cachedView struct {
 	view             *ContextView
+	stored           []StoredMessage
+	active           *SummarySnapshot
 	historyCount     int
 	managedSuffix    string
 	availableToolKey string
+	lifecycleKey     string
+	rulesKey         string
+	memoryKey        string
 }
 
 // tokenCalibration 记录同一会话最近一次真实发送给模型的上下文用量。下一次
@@ -164,7 +171,9 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 			return nil, err
 		}
 	}
-	if view, ok := m.updateCachedView(input); ok {
+	if view, ok, err := m.updateCachedView(ctx, input); err != nil {
+		return nil, err
+	} else if ok {
 		return view, nil
 	}
 	// active summary 与覆盖游标共同构成持久化压缩检查点。
@@ -176,23 +185,9 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	if err != nil {
 		return nil, err
 	}
-	// 第 1 层：新出现的大工具结果超过单项或批次阈值时才归档。
-	beforeTools := toolResultTokens(m.estimator, m.model.ModelName, stored)
-	stored, err = m.offloader.Process(ctx, input.Context.SessionID, stored)
+	stored, reports, err := m.applyToolPolicies(ctx, input, stored, nil)
 	if err != nil {
 		return nil, err
-	}
-	reports := []LayerReport{}
-	afterOffload := toolResultTokens(m.estimator, m.model.ModelName, stored)
-	if afterOffload != beforeTools {
-		reports = append(reports, LayerReport{Layer: "result_offloader", BeforeTokens: beforeTools, AfterTokens: afterOffload, Reason: "tool result threshold exceeded"})
-	}
-	// 第 2 层：只有工具历史整体超过独立预算时才淘汰旧结果。
-	if afterOffload > m.budget.ToolHistoryLimit {
-		before := afterOffload
-		stored = m.evictor.Evict(stored, input.CurrentTurnID)
-		after := toolResultTokens(m.estimator, m.model.ModelName, stored)
-		reports = append(reports, LayerReport{Layer: "stale_result_evictor", BeforeTokens: before, AfterTokens: after, Reason: "tool history budget exceeded"})
 	}
 
 	// 第 0 层：每次根据活跃路径和当前请求重新装配规则及工具定义。
@@ -241,7 +236,7 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 	if view.EstimatedTokens > m.budget.HardInputLimit {
 		return nil, fmt.Errorf("%w: estimated %d tokens, hard limit %d", ErrContextBudgetExceeded, view.EstimatedTokens, m.budget.HardInputLimit)
 	}
-	m.rememberView(input, view, baseSystemPrompt)
+	m.rememberView(input, view, baseSystemPrompt, active, stored, rules)
 	return view, nil
 }
 
@@ -249,7 +244,7 @@ func (m *ContextManager) Build(ctx context.Context, input BuildInput) (*ContextV
 // It deliberately falls back to the full durable path when an old context is
 // resumed, the tool catalog changes, or the incremental view reaches the
 // compaction threshold.
-func (m *ContextManager) updateCachedView(input BuildInput) (*ContextView, bool) {
+func (m *ContextManager) updateCachedView(ctx context.Context, input BuildInput) (*ContextView, bool, error) {
 	basePrompt := input.SystemPrompt
 	if strings.TrimSpace(basePrompt) == "" {
 		basePrompt = input.Context.SystemPrompt
@@ -257,42 +252,171 @@ func (m *ContextManager) updateCachedView(input BuildInput) (*ContextView, bool)
 	toolKey := toolSchemasKey(input.AvailableTools)
 	m.mu.Lock()
 	cached, ok := m.views[input.Context.SessionID]
+	if ok {
+		cached = cloneCachedView(cached)
+	}
 	m.mu.Unlock()
-	if !ok || cached.view == nil || cached.historyCount > len(input.Context.History) || cached.availableToolKey != toolKey {
-		return nil, false
+	if !ok || cached.view == nil || cached.historyCount > len(input.Context.History) ||
+		cached.availableToolKey != toolKey || cached.lifecycleKey != contextLifecycleKey(input.Context) {
+		return nil, false, nil
 	}
 
-	view := cloneContextView(cached.view)
-	view.SystemPrompt = basePrompt + cached.managedSuffix
-	for _, message := range input.Context.History[cached.historyCount:] {
-		view.Messages = append(view.Messages, cloneMessage(message))
+	stored := append(cloneStoredMessages(cached.stored), storedMessagesFromHistoryRange(
+		input.Context.SessionID, input.Context.History, cached.historyCount,
+	)...)
+	reports := append([]LayerReport(nil), cached.view.AppliedLayers...)
+	var err error
+	stored, reports, err = m.applyToolPolicies(ctx, input, stored, reports)
+	if err != nil {
+		return nil, false, err
 	}
-	view.rawTokens = m.estimator.EstimateText(m.model.ModelName, view.SystemPrompt) +
-		m.estimator.EstimateMessages(m.model.ModelName, view.Messages) +
-		m.estimator.EstimateTools(m.model.ModelName, view.Tools)
-	view.EstimatedTokens = m.calibratedEstimate(input.Context.SessionID, view.rawTokens)
+
+	rules, err := m.loader.LoadRules(activePaths(stored))
+	if err != nil {
+		return nil, false, err
+	}
+	ruleKey := loadedRulesKey(rules)
+	memoryKey := textCacheKey(input.Context.LongTermMemory)
+	managedSuffix := cached.managedSuffix
+	if cached.rulesKey != ruleKey || cached.memoryKey != memoryKey {
+		managedPrompt := appendRules(basePrompt, rules)
+		if strings.TrimSpace(input.Context.LongTermMemory) != "" {
+			managedPrompt = appendMemorySummary(managedPrompt, input.Context.LongTermMemory)
+		}
+		managedSuffix = strings.TrimPrefix(managedPrompt, basePrompt)
+	}
+	selectedTools := m.loader.SelectTools(input.CurrentRequest, activeToolNames(stored), input.AvailableTools)
+	view := m.renderView(input.Context.SessionID, basePrompt+managedSuffix, cached.active, stored, selectedTools, reports)
 	if view.EstimatedTokens >= m.budget.SoftCompactLimit || view.EstimatedTokens > m.budget.HardInputLimit {
-		return nil, false
+		return nil, false, nil
 	}
 	m.mu.Lock()
 	m.views[input.Context.SessionID] = cachedView{
-		view: view, historyCount: len(input.Context.History), managedSuffix: cached.managedSuffix, availableToolKey: toolKey,
+		view: cloneContextView(view), stored: cloneStoredMessages(stored), active: cloneSummarySnapshot(cached.active),
+		historyCount: len(input.Context.History), managedSuffix: managedSuffix, availableToolKey: toolKey,
+		lifecycleKey: cached.lifecycleKey, rulesKey: ruleKey, memoryKey: memoryKey,
 	}
 	m.mu.Unlock()
-	return view, true
+	return view, true, nil
 }
 
-func (m *ContextManager) rememberView(input BuildInput, view *ContextView, basePrompt string) {
+func (m *ContextManager) rememberView(input BuildInput, view *ContextView, basePrompt string, active *SummarySnapshot, stored []StoredMessage, rules []LoadedRule) {
 	if view == nil || input.Context == nil {
 		return
 	}
 	suffix := strings.TrimPrefix(view.SystemPrompt, basePrompt)
 	m.mu.Lock()
 	m.views[input.Context.SessionID] = cachedView{
-		view: cloneContextView(view), historyCount: len(input.Context.History), managedSuffix: suffix,
-		availableToolKey: toolSchemasKey(input.AvailableTools),
+		view: cloneContextView(view), stored: cloneStoredMessages(stored), active: cloneSummarySnapshot(active),
+		historyCount: len(input.Context.History), managedSuffix: suffix,
+		availableToolKey: toolSchemasKey(input.AvailableTools), lifecycleKey: contextLifecycleKey(input.Context),
+		rulesKey: loadedRulesKey(rules), memoryKey: textCacheKey(input.Context.LongTermMemory),
 	}
 	m.mu.Unlock()
+}
+
+func (m *ContextManager) applyToolPolicies(ctx context.Context, input BuildInput, stored []StoredMessage, reports []LayerReport) ([]StoredMessage, []LayerReport, error) {
+	// 第 1 层：新出现的大工具结果超过单项或批次阈值时才归档。
+	beforeTools := toolResultTokens(m.estimator, m.model.ModelName, stored)
+	processed, err := m.offloader.Process(ctx, input.Context.SessionID, stored)
+	if err != nil {
+		return nil, nil, err
+	}
+	afterOffload := toolResultTokens(m.estimator, m.model.ModelName, processed)
+	if afterOffload != beforeTools {
+		reports = append(reports, LayerReport{Layer: "result_offloader", BeforeTokens: beforeTools, AfterTokens: afterOffload, Reason: "tool result threshold exceeded"})
+	}
+	// 第 2 层：只有工具历史整体超过独立预算时才淘汰旧结果。
+	if afterOffload > m.budget.ToolHistoryLimit {
+		before := afterOffload
+		processed = m.evictor.Evict(processed, resolvedCurrentTurnID(input))
+		after := toolResultTokens(m.estimator, m.model.ModelName, processed)
+		if after != before {
+			reports = append(reports, LayerReport{Layer: "stale_result_evictor", BeforeTokens: before, AfterTokens: after, Reason: "tool history budget exceeded"})
+		}
+	}
+	return processed, reports, nil
+}
+
+func resolvedCurrentTurnID(input BuildInput) string {
+	if input.CurrentTurnID != "" {
+		return input.CurrentTurnID
+	}
+	turn := 0
+	for _, message := range input.Context.History {
+		if message.Role == conversation.USER {
+			turn++
+		}
+		if turn == 0 {
+			turn = 1
+		}
+	}
+	if turn == 0 {
+		return ""
+	}
+	return fmt.Sprintf("turn-%06d", turn)
+}
+
+func storedMessagesFromHistoryRange(sessionID string, history []conversation.Message, start int) []StoredMessage {
+	if start < 0 || start >= len(history) {
+		return nil
+	}
+	turn := 0
+	var stored []StoredMessage
+	for index, item := range history {
+		if item.Role == conversation.USER {
+			turn++
+		}
+		if turn == 0 {
+			turn = 1
+		}
+		if index >= start {
+			stored = append(stored, fromMessage(item, sessionID, index+1, turn))
+		}
+	}
+	return stored
+}
+
+func cloneCachedView(source cachedView) cachedView {
+	source.view = cloneContextView(source.view)
+	source.stored = cloneStoredMessages(source.stored)
+	source.active = cloneSummarySnapshot(source.active)
+	return source
+}
+
+func cloneSummarySnapshot(source *SummarySnapshot) *SummarySnapshot {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.ArtifactIDs = append([]string(nil), source.ArtifactIDs...)
+	return &cloned
+}
+
+func contextLifecycleKey(context *ConversationContext) string {
+	if context == nil {
+		return ""
+	}
+	if context.LifecycleKey != "" {
+		return context.LifecycleKey
+	}
+	return context.SessionID
+}
+
+func loadedRulesKey(rules []LoadedRule) string {
+	var builder strings.Builder
+	for _, rule := range rules {
+		builder.WriteString(rule.Path)
+		builder.WriteByte('\x00')
+		builder.WriteString(rule.ContentHash)
+		builder.WriteByte('\x00')
+	}
+	return textCacheKey(builder.String())
+}
+
+func textCacheKey(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%x", digest[:])
 }
 
 func cloneContextView(source *ContextView) *ContextView {
@@ -327,14 +451,8 @@ func cloneMessage(message conversation.Message) conversation.Message {
 }
 
 func toolSchemasKey(schemas []*tool.ToolSchema) string {
-	var builder strings.Builder
-	for _, schema := range schemas {
-		if schema != nil {
-			builder.WriteString(schema.Name)
-			builder.WriteByte('\x00')
-		}
-	}
-	return builder.String()
+	encoded, _ := json.Marshal(schemas)
+	return textCacheKey(string(encoded))
 }
 
 // messagesForView 根据 active checkpoint 选择原始消息读取起点。
