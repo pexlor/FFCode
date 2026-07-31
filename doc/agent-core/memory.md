@@ -12,7 +12,7 @@ Memory 从已经完成且稳定的历史会话中提取可复用信息，在后�
 .context/sessions transcript
         |
         v
-Memory Service（每 5 分钟扫描）
+Memory Service（启动补扫 + Turn 通知 + 30 秒兜底扫描）
   Phase 1: LLMExtractor --并发/按 Session 租约--> RawMemory
   Phase 2: LLMConsolidator --全局租约--> MemorySnapshot
         |
@@ -33,7 +33,8 @@ memory:
   generate: true
   use: true
   root: .ffcode/memory
-  min_session_idle: 30m
+  min_session_idle: 10m
+  scan_interval: 30s
   extraction_concurrency: 2
   max_sessions_per_run: 100
   summary_token_limit: 8000
@@ -42,21 +43,21 @@ memory:
   disable_on_external_context: true
 ```
 
-相对 `root` 按 Workspace 解析，默认得到 `<workspace>/.ffcode/memory/`。`generate` 控制后台 Worker，`use` 控制 Prompt 注入，二者互相独立。专用模型名为空时复用主模型名和 Client。
+相对 `root` 按 Workspace 解析，默认得到 `<workspace>/.ffcode/memory/`。`generate` 控制后台 Worker，`use` 控制 Prompt 注入，二者互相独立。专用模型名为空时复用主模型；非空时使用相同 Provider 配置创建专用 Client。
 
-`summary_token_limit` 和 `disable_on_external_context` 已进入配置结构，但当前运行链路尚未消费这两个字段，不能依赖它们限制实际输入。
+`summary_token_limit` 以保守 Rune 上限约束实际摘要。`disable_on_external_context` 尚未接入运行链路。
 
 ### Phase 1：会话抽取
 
-Worker 每 5 分钟扫描同一 Workspace 最近最多 `max_sessions_per_run` 个 Session。只有闲置超过 `min_session_idle` 且最后消息为完整 Turn 的 Transcript 才进入抽取。
+Worker 启动时立即补扫，Turn 完成后安排空闲边界检查，并每 `scan_interval` 兜底扫描同一 Workspace 最近最多 `max_sessions_per_run` 个 Session。只有闲置超过 `min_session_idle` 且最后消息为完整 Turn 的 Transcript 才进入抽取。
 
 候选项由 Session ID、消息数版本和 Transcript SHA-256 标识。每个 Session 的提取任务使用带 Owner、随机 Token 和过期时间的租约；相同版本成功后不会重复处理。默认最多并发 2 个抽取任务。
 
-抽取模型只能返回四类条目：`user_preference`、`correction`、`project_fact` 和 `reference`。每条必须有指向真实 Message/Turn 的 Evidence，Confidence 在 `[0,1]`，用户偏好和纠正必须由用户消息支撑，只有 Assistant 推测的项目事实会被拒绝。
+抽取输入会在调用模型前删除 Thinking、脱敏凭据并按完整 Turn 控制预算。成功任务保存 SourceVersion 水位线，下一次只发送新增消息。抽取模型只能返回四类条目：`user_preference`、`correction`、`project_fact` 和 `reference`。每条必须有指向真实 Message/Turn 的原文 Evidence，Confidence 在 `[0,1]`，用户偏好和纠正必须由用户消息支撑，只有 Assistant 推测的项目事实会被拒绝。
 
 ### Phase 2：整合
 
-整合任务持有全局文件租约，读取 RawMemory 和前一活动 Snapshot，调用 LLMConsolidator；解析或模型失败时使用 DeterministicConsolidator fallback。提交时校验活动版本，生成递增 Snapshot，并在所有输出就绪后原子切换 Manifest。
+整合任务持有全局文件租约，只读取 Manifest 尚未标记处理的 RawMemory 和前一活动 Snapshot，调用 LLMConsolidator；解析、来源校验或模型失败时使用 DeterministicConsolidator fallback。提交时校验活动版本，生成递增 Snapshot，并在所有输出就绪后原子切换 Manifest。无新输入时不会创建新 Snapshot。
 
 条目状态为 `active`、`superseded`、`expired` 或 `rejected`。摘要是默认注入模型的短文本，详细内容保留用于审计。
 
@@ -86,8 +87,8 @@ Worker 每 5 分钟扫描同一 Workspace 最近最多 `max_sessions_per_run` �
 ### 当前限制
 
 - 没有 `/memory` 管理命令和 Session 软删除/自动清理。
-- 后台 RunOnce 错误当前不会呈现在 UI 中。
-- Memory Pipeline 不独立配置协议、Base URL 或 API Key，只能复用主 LLM Client。
+- 后台错误输出到诊断流，但尚无 `/memory status` 聚合界面。
+- `global` Scope 尚未使用独立用户级 Store，因此当前不会跨 Workspace 传播。
 
 ## 功能测试
 

@@ -25,18 +25,44 @@ type manifest struct {
 	FormatVersion         int       `json:"format_version"`
 	ActiveSnapshotVersion int       `json:"active_snapshot_version"`
 	InputWatermark        string    `json:"input_watermark,omitempty"`
+	ProcessedRawMemoryIDs []string  `json:"processed_raw_memory_ids,omitempty"`
 	LastConsolidationAt   time.Time `json:"last_consolidation_at,omitempty"`
 }
 
 type extractionJob struct {
-	Candidate   memory.ExtractionCandidate `json:"candidate"`
-	Status      string                     `json:"status"`
-	OwnerID     string                     `json:"owner_id,omitempty"`
-	Token       string                     `json:"token,omitempty"`
-	LeaseUntil  time.Time                  `json:"lease_until,omitempty"`
-	RetryAt     time.Time                  `json:"retry_at,omitempty"`
-	Failure     string                     `json:"failure,omitempty"`
-	RawMemoryID string                     `json:"raw_memory_id,omitempty"`
+	Candidate                   memory.ExtractionCandidate `json:"candidate"`
+	Status                      string                     `json:"status"`
+	OwnerID                     string                     `json:"owner_id,omitempty"`
+	Token                       string                     `json:"token,omitempty"`
+	LeaseUntil                  time.Time                  `json:"lease_until,omitempty"`
+	RetryAt                     time.Time                  `json:"retry_at,omitempty"`
+	Failure                     string                     `json:"failure,omitempty"`
+	RawMemoryID                 string                     `json:"raw_memory_id,omitempty"`
+	LastSuccessfulSourceVersion int                        `json:"last_successful_source_version,omitempty"`
+}
+
+func (s *Store) ExtractionWatermark(ctx context.Context, sessionID string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if !conversation.ValidIdentifier(sessionID) {
+		return 0, memory.ErrInvalidMemory
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var job extractionJob
+	if err := readJSON(s.extractionPath(sessionID), &job); errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	}
+	if job.LastSuccessfulSourceVersion > 0 {
+		return job.LastSuccessfulSourceVersion, nil
+	}
+	if job.Status == "succeeded" || job.Status == "succeeded_no_output" {
+		return job.Candidate.SourceVersion, nil
+	}
+	return 0, nil
 }
 
 type Store struct {
@@ -93,7 +119,11 @@ func (s *Store) ClaimExtraction(ctx context.Context, candidate memory.Extraction
 		return memory.ExtractionClaim{}, err
 	}
 	claim := memory.ExtractionClaim{Candidate: candidate, OwnerID: owner, Token: token, ExpiresAt: time.Now().Add(ttl)}
-	job = extractionJob{Candidate: candidate, Status: "running", OwnerID: owner, Token: token, LeaseUntil: claim.ExpiresAt}
+	lastSuccessful := job.LastSuccessfulSourceVersion
+	if lastSuccessful == 0 && (job.Status == "succeeded" || job.Status == "succeeded_no_output") {
+		lastSuccessful = job.Candidate.SourceVersion
+	}
+	job = extractionJob{Candidate: candidate, Status: "running", OwnerID: owner, Token: token, LeaseUntil: claim.ExpiresAt, LastSuccessfulSourceVersion: lastSuccessful}
 	if err := writeJSONAtomic(path, job); err != nil {
 		return memory.ExtractionClaim{}, err
 	}
@@ -116,6 +146,7 @@ func (s *Store) CompleteExtraction(ctx context.Context, claim memory.ExtractionC
 	}
 	if raw.ID == "" {
 		job.Status = "succeeded_no_output"
+		job.LastSuccessfulSourceVersion = claim.Candidate.SourceVersion
 		job.OwnerID, job.Token = "", ""
 		return writeJSONAtomic(path, job)
 	}
@@ -126,6 +157,7 @@ func (s *Store) CompleteExtraction(ctx context.Context, claim memory.ExtractionC
 		return err
 	}
 	job.Status, job.RawMemoryID = "succeeded", raw.ID
+	job.LastSuccessfulSourceVersion = claim.Candidate.SourceVersion
 	job.OwnerID, job.Token = "", ""
 	return writeJSONAtomic(path, job)
 }
@@ -150,6 +182,27 @@ func (s *Store) ListConsolidationInputs(ctx context.Context, limit int, now time
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var current manifest
+	if err := readJSON(filepath.Join(s.root, "manifest.json"), &current); err != nil {
+		return nil, err
+	}
+	processed := make(map[string]bool, len(current.ProcessedRawMemoryIDs))
+	for _, id := range current.ProcessedRawMemoryIDs {
+		processed[id] = true
+	}
+	// Upgrade manifests written before processed IDs were tracked. The active
+	// snapshot used to contain every input, so it is a safe compatibility seed.
+	if len(processed) == 0 && current.ActiveSnapshotVersion > 0 {
+		var active memory.MemorySnapshot
+		if err := readJSON(filepath.Join(s.root, "snapshots", fmt.Sprintf("memory-%06d.json", current.ActiveSnapshotVersion)), &active); err != nil {
+			return nil, err
+		}
+		for _, id := range active.InputRawMemoryIDs {
+			processed[id] = true
+		}
+	}
 	file, err := os.Open(filepath.Join(s.root, "raw_memories.jsonl"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -166,7 +219,9 @@ func (s *Store) ListConsolidationInputs(ctx context.Context, limit int, now time
 		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
 			return nil, fmt.Errorf("decode raw memories: %w", err)
 		}
-		result = append(result, raw)
+		if !processed[raw.ID] {
+			result = append(result, raw)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -175,7 +230,7 @@ func (s *Store) ListConsolidationInputs(ctx context.Context, limit int, now time
 		if result[i].GeneratedAt.Equal(result[j].GeneratedAt) {
 			return result[i].ID < result[j].ID
 		}
-		return result[i].GeneratedAt.After(result[j].GeneratedAt)
+		return result[i].GeneratedAt.Before(result[j].GeneratedAt)
 	})
 	if limit > 0 && len(result) > limit {
 		result = result[:limit]
@@ -293,6 +348,27 @@ func (s *Store) CommitSnapshot(ctx context.Context, claim memory.ConsolidationCl
 	}
 	current.ActiveSnapshotVersion = snapshot.Version
 	current.InputWatermark = snapshot.InputWatermark
+	processed := make(map[string]bool, len(current.ProcessedRawMemoryIDs)+len(snapshot.InputRawMemoryIDs))
+	for _, id := range current.ProcessedRawMemoryIDs {
+		processed[id] = true
+	}
+	if len(processed) == 0 && current.ActiveSnapshotVersion > 0 {
+		var active memory.MemorySnapshot
+		if err := readJSON(filepath.Join(s.root, "snapshots", fmt.Sprintf("memory-%06d.json", current.ActiveSnapshotVersion)), &active); err != nil {
+			return err
+		}
+		for _, id := range active.InputRawMemoryIDs {
+			processed[id] = true
+		}
+	}
+	for _, id := range snapshot.InputRawMemoryIDs {
+		processed[id] = true
+	}
+	current.ProcessedRawMemoryIDs = current.ProcessedRawMemoryIDs[:0]
+	for id := range processed {
+		current.ProcessedRawMemoryIDs = append(current.ProcessedRawMemoryIDs, id)
+	}
+	sort.Strings(current.ProcessedRawMemoryIDs)
 	current.LastConsolidationAt = snapshot.CreatedAt
 	if err := writeJSONAtomic(filepath.Join(s.root, "manifest.json"), current); err != nil {
 		return err

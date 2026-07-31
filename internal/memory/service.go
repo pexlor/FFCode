@@ -29,10 +29,13 @@ type Service struct {
 	LeaseTTL     time.Duration
 	MaxSessions  int
 	Concurrency  int
+	ScanInterval time.Duration
 	Now          func() time.Time
+	OnError      func(error)
 
 	mu      sync.Mutex
 	running bool
+	trigger chan struct{}
 }
 
 func (s *Service) RunOnce(ctx context.Context) error {
@@ -44,7 +47,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		now = s.Now()
 	}
 	if s.MinIdle <= 0 {
-		s.MinIdle = 30 * time.Minute
+		s.MinIdle = 10 * time.Minute
 	}
 	if s.LeaseTTL <= 0 {
 		s.LeaseTTL = time.Hour
@@ -86,6 +89,14 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		if hashErr != nil {
 			return hashErr
 		}
+		watermark, watermarkErr := s.Store.ExtractionWatermark(ctx, session.ID)
+		if watermarkErr != nil {
+			return watermarkErr
+		}
+		extractionMessages := messages
+		if watermark > 0 && watermark < len(messages) {
+			extractionMessages = messages[watermark:]
+		}
 		sem <- struct{}{}
 		wait.Add(1)
 		go func(session conversation.SessionMetadata, messages []conversation.StoredMessage, candidate ExtractionCandidate) {
@@ -98,7 +109,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 				}
 				errMu.Unlock()
 			}
-		}(session, messages, candidate)
+		}(session, extractionMessages, candidate)
 	}
 	wait.Wait()
 	if s.Consolidator != nil {
@@ -117,12 +128,12 @@ func (s *Service) RunConsolidationOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	inputs, err := s.Store.ListConsolidationInputs(ctx, 200, time.Now())
+	previous, err := s.Store.ActiveSnapshot(ctx)
 	if err != nil {
 		_ = s.Store.ReleaseConsolidation(ctx, claim)
 		return err
 	}
-	previous, err := s.Store.ActiveSnapshot(ctx)
+	inputs, err := s.Store.ListConsolidationInputs(ctx, 200, time.Now())
 	if err != nil {
 		_ = s.Store.ReleaseConsolidation(ctx, claim)
 		return err
@@ -144,20 +155,78 @@ func (s *Service) RunConsolidationOnce(ctx context.Context) error {
 }
 
 func (s *Service) Start(ctx context.Context) context.CancelFunc {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	workerCtx, cancel := context.WithCancel(ctx)
+	interval := s.ScanInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	idleDelay := s.MinIdle
+	if idleDelay <= 0 {
+		idleDelay = 10 * time.Minute
+	}
+	s.mu.Lock()
+	trigger := make(chan struct{}, 1)
+	s.trigger = trigger
+	s.mu.Unlock()
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		defer func() {
+			s.mu.Lock()
+			if s.trigger == trigger {
+				s.trigger = nil
+			}
+			s.mu.Unlock()
+		}()
+		run := func() {
+			if err := s.RunOnce(workerCtx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrLeaseHeld) && s.OnError != nil {
+				s.OnError(err)
+			}
+		}
+		run()
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		idleTimer := time.NewTimer(idleDelay)
+		defer idleTimer.Stop()
 		for {
 			select {
 			case <-workerCtx.Done():
 				return
+			case <-trigger:
+				if !idleTimer.Stop() {
+					select {
+					case <-idleTimer.C:
+					default:
+					}
+				}
+				idleTimer.Reset(idleDelay)
+			case <-idleTimer.C:
+				run()
+				idleTimer.Reset(idleDelay)
 			case <-ticker.C:
-				_ = s.RunOnce(workerCtx)
+				run()
 			}
 		}
 	}()
 	return cancel
+}
+
+// NotifyTurnComplete schedules an exact idle-boundary check without blocking
+// the foreground turn. The periodic scanner remains a crash-recovery fallback.
+func (s *Service) NotifyTurnComplete(_ string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	trigger := s.trigger
+	s.mu.Unlock()
+	if trigger != nil {
+		select {
+		case trigger <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Service) extractOne(ctx context.Context, session conversation.SessionMetadata, messages []conversation.StoredMessage, candidate ExtractionCandidate) error {
@@ -167,7 +236,10 @@ func (s *Service) extractOne(ctx context.Context, session conversation.SessionMe
 	}
 	raw, err := s.Extractor.Extract(ctx, ExtractRequest{SessionID: session.ID, Workspace: session.Workspace, SourceVersion: candidate.SourceVersion, TranscriptHash: candidate.TranscriptHash, Messages: messages})
 	if err != nil {
-		return s.Store.FailExtraction(ctx, claim, err.Error(), time.Now().Add(time.Hour))
+		if failErr := s.Store.FailExtraction(ctx, claim, err.Error(), time.Now().Add(time.Hour)); failErr != nil {
+			return errors.Join(err, failErr)
+		}
+		return err
 	}
 	if raw.ID != "" {
 		if err := ValidateRawMemory(raw, messages); err != nil {

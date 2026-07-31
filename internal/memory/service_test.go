@@ -2,7 +2,10 @@ package memory_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,5 +77,86 @@ func TestServiceRunOnceConsolidatesNewRawMemory(t *testing.T) {
 	}
 	if summary == "" || !strings.Contains(summary, "run tests") {
 		t.Fatalf("unexpected summary: %q", summary)
+	}
+	if err := service.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.ActiveSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot == nil || snapshot.Version != 1 {
+		t.Fatalf("unchanged inputs created another snapshot: %+v", snapshot)
+	}
+}
+
+type failingExtractor struct{}
+
+func (failingExtractor) Extract(context.Context, memory.ExtractRequest) (memory.RawMemory, error) {
+	return memory.RawMemory{}, errors.New("extract failed")
+}
+
+func TestServiceStartRunsImmediatelyAndReportsExtractionErrors(t *testing.T) {
+	root := t.TempDir()
+	store, err := filememory.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Hour)
+	source := fakeTranscriptSource{sessions: []conversation.SessionMetadata{{ID: "session-idle", Workspace: "/project", UpdatedAt: now}}, messages: map[string][]conversation.StoredMessage{"session-idle": {{ID: "m1", SessionID: "session-idle", TurnID: "t1", Role: conversation.USER, Content: "remember this", TurnStatus: conversation.TurnComplete}}}}
+	reported := make(chan error, 1)
+	service := memory.Service{Store: store, Source: source, Extractor: failingExtractor{}, OwnerID: "test", Workspace: "/project", MinIdle: time.Minute, ScanInterval: time.Hour, OnError: func(err error) { reported <- err }}
+	cancel := service.Start(context.Background())
+	defer cancel()
+	select {
+	case err := <-reported:
+		if !strings.Contains(err.Error(), "extract failed") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("memory worker did not run immediately")
+	}
+}
+
+type recordingExtractor struct {
+	mu       sync.Mutex
+	requests []memory.ExtractRequest
+}
+
+func (r *recordingExtractor) Extract(_ context.Context, request memory.ExtractRequest) (memory.RawMemory, error) {
+	r.mu.Lock()
+	r.requests = append(r.requests, request)
+	r.mu.Unlock()
+	message := request.Messages[0]
+	return memory.RawMemory{
+		ID: fmt.Sprintf("raw-%d", request.SourceVersion), SessionID: request.SessionID, Workspace: request.Workspace,
+		SourceVersion: request.SourceVersion, TranscriptHash: request.TranscriptHash, PromptVersion: 1, GeneratedAt: time.Now(),
+		Categories: []memory.MemoryItem{{Key: "reference/project/note", Kind: memory.Reference, Content: message.Content, Confidence: 0.9, Evidence: []memory.Evidence{{MessageID: message.ID, TurnID: message.TurnID, Quote: message.Content}}}},
+	}, nil
+}
+
+func TestServiceExtractsOnlyMessagesAfterSuccessfulWatermark(t *testing.T) {
+	store, err := filememory.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Hour)
+	source := fakeTranscriptSource{
+		sessions: []conversation.SessionMetadata{{ID: "session-idle", Workspace: "/project", UpdatedAt: now}},
+		messages: map[string][]conversation.StoredMessage{"session-idle": {{ID: "m1", SessionID: "session-idle", TurnID: "t1", Role: conversation.USER, Content: "first", TurnStatus: conversation.TurnComplete}}},
+	}
+	extractor := &recordingExtractor{}
+	service := memory.Service{Store: store, Source: source, Extractor: extractor, OwnerID: "test", Workspace: "/project", MinIdle: time.Minute}
+	if err := service.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	source.messages["session-idle"] = append(source.messages["session-idle"], conversation.StoredMessage{ID: "m2", SessionID: "session-idle", TurnID: "t2", Role: conversation.USER, Content: "second", TurnStatus: conversation.TurnComplete})
+	if err := service.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	extractor.mu.Lock()
+	defer extractor.mu.Unlock()
+	if len(extractor.requests) != 2 || len(extractor.requests[1].Messages) != 1 || extractor.requests[1].Messages[0].ID != "m2" {
+		t.Fatalf("unexpected incremental requests: %+v", extractor.requests)
 	}
 }

@@ -55,6 +55,7 @@ type RawMemory struct {
 type ConsolidatedEntry struct {
 	Key             string     `json:"key"`
 	Kind            MemoryKind `json:"kind"`
+	Scope           string     `json:"scope,omitempty"`
 	Content         string     `json:"content"`
 	SourceMemoryIDs []string   `json:"source_memory_ids"`
 	Confidence      float64    `json:"confidence"`
@@ -100,6 +101,7 @@ type ConsolidationClaim struct {
 }
 
 type Store interface {
+	ExtractionWatermark(context.Context, string) (int, error)
 	ClaimExtraction(context.Context, ExtractionCandidate, string, time.Duration) (ExtractionClaim, error)
 	CompleteExtraction(context.Context, ExtractionClaim, RawMemory) error
 	FailExtraction(context.Context, ExtractionClaim, string, time.Time) error

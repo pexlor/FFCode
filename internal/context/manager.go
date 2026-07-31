@@ -54,28 +54,30 @@ type BuildInput struct {
 
 // ContextManagerConfig 注入存储、预算、模型和摘要器依赖，便于单元测试替换。
 type ContextManagerConfig struct {
-	Store     ConversationStore
-	Estimator TokenEstimator
-	Policy    ContextPolicy
-	Model     ModelContextSpec
-	Workspace string
-	Primary   Summarizer
-	Fallback  Summarizer
-	Hooks     *hook.Dispatcher
+	Store          ConversationStore
+	Estimator      TokenEstimator
+	Policy         ContextPolicy
+	Model          ModelContextSpec
+	Workspace      string
+	Primary        Summarizer
+	Fallback       Summarizer
+	Hooks          *hook.Dispatcher
+	OnTurnComplete func(string)
 }
 
 // ContextManager 编排四级触发式上下文管理。
 // 四级组件并非每轮全部执行：只有 DemandLoader 每次装配，其余组件都受阈值控制。
 type ContextManager struct {
-	store     ConversationStore
-	estimator TokenEstimator
-	policy    ContextPolicy
-	model     ModelContextSpec
-	budget    ContextBudget
-	loader    DemandLoader
-	offloader ResultOffloader
-	evictor   StaleResultEvictor
-	compactor ConversationCompactor
+	store          ConversationStore
+	estimator      TokenEstimator
+	policy         ContextPolicy
+	model          ModelContextSpec
+	budget         ContextBudget
+	loader         DemandLoader
+	offloader      ResultOffloader
+	evictor        StaleResultEvictor
+	compactor      ConversationCompactor
+	onTurnComplete func(string)
 
 	// syncedCount 和 turnCount 记录当前进程已经写入 Store 的 History 位置，
 	// 避免同一条内存消息在多次 Agent iteration 中重复追加到 transcript。
@@ -118,16 +120,17 @@ func NewContextManager(config ContextManagerConfig) (*ContextManager, error) {
 		return nil, err
 	}
 	manager := &ContextManager{
-		store:       config.Store,
-		estimator:   config.Estimator,
-		policy:      config.Policy,
-		model:       config.Model,
-		budget:      budget,
-		loader:      DemandLoader{Workspace: config.Workspace},
-		syncedCount: make(map[string]int),
-		turnCount:   make(map[string]int),
-		calibration: make(map[string]tokenCalibration),
-		views:       make(map[string]cachedView),
+		store:          config.Store,
+		estimator:      config.Estimator,
+		policy:         config.Policy,
+		model:          config.Model,
+		budget:         budget,
+		loader:         DemandLoader{Workspace: config.Workspace},
+		syncedCount:    make(map[string]int),
+		turnCount:      make(map[string]int),
+		calibration:    make(map[string]tokenCalibration),
+		views:          make(map[string]cachedView),
+		onTurnComplete: config.OnTurnComplete,
 	}
 	manager.offloader = ResultOffloader{
 		Store: config.Store, Estimator: config.Estimator, Model: config.Model.ModelName,
@@ -527,6 +530,9 @@ func (m *ContextManager) SyncContext(ctx context.Context, conversationContext *C
 		return err
 	}
 	conversationContext.Commit()
+	if m.onTurnComplete != nil {
+		m.onTurnComplete(conversationContext.SessionID)
+	}
 	return nil
 }
 

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -52,6 +53,7 @@ type MemoryConfig struct {
 	Use                   bool   `yaml:"use"`
 	Root                  string `yaml:"root"`
 	MinSessionIdle        string `yaml:"min_session_idle"`
+	ScanInterval          string `yaml:"scan_interval"`
 	ExtractionConcurrency int    `yaml:"extraction_concurrency"`
 	MaxSessionsPerRun     int    `yaml:"max_sessions_per_run"`
 	SummaryTokenLimit     int    `yaml:"summary_token_limit"`
@@ -81,7 +83,10 @@ func (c *Config) applyDefaults() {
 		c.Memory.Root = ".ffcode/memory"
 	}
 	if c.Memory.MinSessionIdle == "" {
-		c.Memory.MinSessionIdle = "30m"
+		c.Memory.MinSessionIdle = "10m"
+	}
+	if c.Memory.ScanInterval == "" {
+		c.Memory.ScanInterval = "30s"
 	}
 	if c.Memory.ExtractionConcurrency == 0 {
 		c.Memory.ExtractionConcurrency = 2
@@ -131,6 +136,15 @@ func (c Config) validate() error {
 	}
 	if c.Memory.ExtractionConcurrency <= 0 || c.Memory.MaxSessionsPerRun <= 0 || c.Memory.SummaryTokenLimit <= 0 {
 		return fmt.Errorf("memory limits must be positive")
+	}
+	for _, duration := range []struct {
+		name  string
+		value string
+	}{{"memory.min_session_idle", c.Memory.MinSessionIdle}, {"memory.scan_interval", c.Memory.ScanInterval}} {
+		parsed, err := time.ParseDuration(duration.value)
+		if err != nil || parsed <= 0 {
+			return fmt.Errorf("%s must be a positive duration", duration.name)
+		}
 	}
 	return nil
 }

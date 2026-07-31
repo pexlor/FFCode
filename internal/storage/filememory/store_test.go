@@ -85,3 +85,65 @@ func TestSnapshotCommitUsesLeaseAndOptimisticVersion(t *testing.T) {
 		t.Fatalf("expected version conflict, got %v", err)
 	}
 }
+
+func TestCommittedRawMemoriesAreNotListedAgain(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	candidate := memory.ExtractionCandidate{SessionID: "session-1", Workspace: "/project", SourceVersion: 1, TranscriptHash: "hash-1"}
+	extraction, err := store.ClaimExtraction(ctx, candidate, "extractor", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := memory.RawMemory{ID: "raw-1", SessionID: candidate.SessionID, Workspace: candidate.Workspace, SourceVersion: 1, TranscriptHash: candidate.TranscriptHash, GeneratedAt: time.Now(), PromptVersion: 1}
+	if err := store.CompleteExtraction(ctx, extraction, raw); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := store.ClaimConsolidation(ctx, "consolidator", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitSnapshot(ctx, claim, 0, memory.MemorySnapshot{Version: 1, InputWatermark: raw.ID, InputRawMemoryIDs: []string{raw.ID}, Summary: "summary"}); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := store.ListConsolidationInputs(ctx, 10, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("committed inputs were returned again: %+v", inputs)
+	}
+}
+
+func TestExtractionWatermarkSurvivesFailedNewVersion(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	first := memory.ExtractionCandidate{SessionID: "session-1", SourceVersion: 2, TranscriptHash: "hash-1"}
+	claim, err := store.ClaimExtraction(ctx, first, "worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteExtraction(ctx, claim, memory.RawMemory{SessionID: first.SessionID, SourceVersion: first.SourceVersion, TranscriptHash: first.TranscriptHash}); err != nil {
+		t.Fatal(err)
+	}
+	second := memory.ExtractionCandidate{SessionID: "session-1", SourceVersion: 4, TranscriptHash: "hash-2"}
+	claim, err = store.ClaimExtraction(ctx, second, "worker", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FailExtraction(ctx, claim, "provider error", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	watermark, err := store.ExtractionWatermark(ctx, first.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if watermark != first.SourceVersion {
+		t.Fatalf("watermark = %d, want %d", watermark, first.SourceVersion)
+	}
+}

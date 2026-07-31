@@ -15,6 +15,8 @@ import (
 	"FFCode/internal/subagent"
 	"FFCode/internal/tool"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +30,7 @@ type runtime struct {
 	cleanup        func()
 }
 
-func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPrompt string) (*runtime, error) {
+func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPrompt string, diagnostics io.Writer) (*runtime, error) {
 	hookDispatcher, err := loadHooks(config, workspace)
 	if err != nil {
 		return nil, err
@@ -93,6 +95,10 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 	if err != nil {
 		return fail(err)
 	}
+	scanInterval, err := time.ParseDuration(config.Memory.ScanInterval)
+	if err != nil {
+		return fail(err)
+	}
 	extractModel := config.Memory.ExtractModel
 	if extractModel == "" {
 		extractModel = config.Model.Name
@@ -101,18 +107,39 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 	if consolidationModel == "" {
 		consolidationModel = config.Model.Name
 	}
+	extractClient := client
+	if extractModel != config.Model.Name {
+		extractConfig := config.Model
+		extractConfig.Name = extractModel
+		extractClient, err = llm.NewClient(modelParameters(extractConfig))
+		if err != nil {
+			return fail(err)
+		}
+	}
+	consolidationClient := client
+	if consolidationModel == extractModel {
+		consolidationClient = extractClient
+	} else if consolidationModel != config.Model.Name {
+		consolidationConfig := config.Model
+		consolidationConfig.Name = consolidationModel
+		consolidationClient, err = llm.NewClient(modelParameters(consolidationConfig))
+		if err != nil {
+			return fail(err)
+		}
+	}
+	fallbackConsolidator := memory.DeterministicConsolidator{SummaryTokenLimit: config.Memory.SummaryTokenLimit}
 	memoryService := &memory.Service{
 		Store: memoryStore, Source: store, OwnerID: "mycode-memory", Workspace: workspace,
-		Extractor:    memory.LLMExtractor{Client: client, Model: extractModel, PromptVersion: 1},
-		Consolidator: memory.LLMConsolidator{Client: client, Model: consolidationModel, Fallback: memory.DeterministicConsolidator{}},
-		MinIdle:      minIdle, MaxSessions: config.Memory.MaxSessionsPerRun, Concurrency: config.Memory.ExtractionConcurrency,
+		Extractor:    memory.LLMExtractor{Client: extractClient, Model: extractModel, PromptVersion: 1},
+		Consolidator: memory.LLMConsolidator{Client: consolidationClient, Model: consolidationModel, SummaryTokenLimit: config.Memory.SummaryTokenLimit, Fallback: fallbackConsolidator},
+		MinIdle:      minIdle, ScanInterval: scanInterval, MaxSessions: config.Memory.MaxSessionsPerRun, Concurrency: config.Memory.ExtractionConcurrency,
+		OnError: func(err error) {
+			if diagnostics != nil {
+				fmt.Fprintf(diagnostics, "长期记忆后台任务失败: %v\n", err)
+			}
+		},
 	}
-	var memoryCancel func()
-	if config.Memory.Generate {
-		memoryCancel = memoryService.Start(ctx)
-	} else {
-		memoryCancel = func() {}
-	}
+	memoryCancel := func() {}
 
 	var primary contextmanager.Summarizer
 	if config.Summary.Model != "" {
@@ -135,10 +162,11 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 			ModelName: config.Model.Name, ContextWindow: config.Context.Window,
 			MaxOutputTokens: config.Context.OutputReserve,
 		},
-		Workspace: workspace,
-		Primary:   primary,
-		Fallback:  contextmanager.LLMSummarizer{Client: client},
-		Hooks:     hookDispatcher,
+		Workspace:      workspace,
+		Primary:        primary,
+		Fallback:       contextmanager.LLMSummarizer{Client: client},
+		Hooks:          hookDispatcher,
+		OnTurnComplete: memoryService.NotifyTurnComplete,
 	})
 	if err != nil {
 		return fail(err)
@@ -151,8 +179,10 @@ func bootstrap(ctx context.Context, config appconfig.Config, workspace, systemPr
 		Hooks:        hookDispatcher,
 	})
 	if err != nil {
-		memoryCancel()
 		return fail(err)
+	}
+	if config.Memory.Generate {
+		memoryCancel = memoryService.Start(ctx)
 	}
 	return &runtime{runner: runner, contextManager: contextManager, sessions: sessions, cleanup: func() { memoryCancel(); cleanup() }}, nil
 }

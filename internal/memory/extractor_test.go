@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"FFCode/internal/conversation"
@@ -28,13 +30,24 @@ func (f fakeLLM) Stream(_ *llm.StreamRequest) (<-chan llm.StreamEvent, <-chan er
 }
 
 func TestLLMExtractorParsesStructuredMemory(t *testing.T) {
-	extractor := LLMExtractor{Client: fakeLLM{events: []llm.StreamEvent{llm.TextStream{Text: `{"id":"raw-1","session_id":"session-1","source_version":1,"transcript_hash":"hash","prompt_version":1,"categories":[]}`}}}, Model: "test", PromptVersion: 1}
+	extractor := LLMExtractor{Client: fakeLLM{events: []llm.StreamEvent{llm.TextStream{Text: `{"id":"model-controlled","session_id":"wrong","categories":[{"key":"reference/project/tests","kind":"reference","content":"Run go test.","confidence":0.9,"evidence":[{"message_id":"m1","turn_id":"t1","quote":"go test"}]}]}`}}}, Model: "extract-model", PromptVersion: 1}
+	raw, err := extractor.Extract(context.Background(), ExtractRequest{SessionID: "session-1", Workspace: "/project", TranscriptHash: "hash", SourceVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(raw.ID, "raw-") || raw.ID == "model-controlled" || raw.SessionID != "session-1" || raw.Workspace != "/project" || raw.ExtractorModel != "extract-model" || raw.Categories[0].Scope != "workspace" {
+		t.Fatalf("unexpected raw memory: %+v", raw)
+	}
+}
+
+func TestLLMExtractorTreatsEmptyCategoriesAsNoOutput(t *testing.T) {
+	extractor := LLMExtractor{Client: fakeLLM{events: []llm.StreamEvent{llm.TextStream{Text: `{"id":"model-id","categories":[]}`}}}, Model: "test", PromptVersion: 1}
 	raw, err := extractor.Extract(context.Background(), ExtractRequest{SessionID: "session-1", TranscriptHash: "hash", SourceVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw.ID != "raw-1" || raw.SessionID != "session-1" {
-		t.Fatalf("unexpected raw memory: %+v", raw)
+	if raw.ID != "" || len(raw.Categories) != 0 {
+		t.Fatalf("empty extraction must not produce raw memory: %+v", raw)
 	}
 }
 
@@ -52,5 +65,44 @@ func TestBuildExtractionPayloadKeepsRelevantMessages(t *testing.T) {
 	}
 	if len(payload) != 2 || payload[0].ID != "m1" {
 		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestBuildExtractionPayloadRemovesThinkingAndRedactsSecrets(t *testing.T) {
+	payload, err := buildExtractionPayload([]conversation.StoredMessage{{
+		ID: "m1", TurnID: "t1", Role: conversation.USER, Content: "password=plain-secret",
+		Thinking:    []conversation.StoredThinkingBlock{{Thinking: "hidden-chain"}},
+		ToolUses:    []conversation.StoredToolUse{{ToolName: "curl", Arguments: map[string]any{"token": "tool-secret", "url": "https://example.com"}}},
+		ToolResults: []conversation.StoredToolResult{{Content: "sk-abcdefghijklmnop"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, forbidden := range []string{"plain-secret", "tool-secret", "sk-abcdefghijklmnop", "hidden-chain"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("payload leaked %q: %s", forbidden, text)
+		}
+	}
+	if !strings.Contains(text, "[redacted]") {
+		t.Fatalf("payload did not retain redaction marker: %s", text)
+	}
+}
+
+func TestBuildExtractionPayloadDropsOldTurnsAtBudgetBoundary(t *testing.T) {
+	var messages []conversation.StoredMessage
+	for index := 1; index <= 5; index++ {
+		messages = append(messages, conversation.StoredMessage{ID: string(rune('a' + index)), TurnID: string(rune('a' + index)), Role: conversation.USER, Content: strings.Repeat(string(rune('a'+index)), 12_000)})
+	}
+	payload, err := buildExtractionPayload(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) >= len(messages) || payload[len(payload)-1].TurnID != messages[len(messages)-1].TurnID {
+		t.Fatalf("payload should retain newest complete turns within budget: got %d messages", len(payload))
 	}
 }

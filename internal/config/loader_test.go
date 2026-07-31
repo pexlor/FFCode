@@ -149,10 +149,27 @@ func TestMemoryConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Memory.Generate || !got.Memory.Use || got.Memory.Root == "" || got.Memory.ExtractionConcurrency <= 0 {
+	if !got.Memory.Generate || !got.Memory.Use || got.Memory.Root == "" || got.Memory.ExtractionConcurrency <= 0 || got.Memory.MinSessionIdle != "10m" || got.Memory.ScanInterval != "30s" {
 		t.Fatalf("unexpected defaults: %+v", got.Memory)
 	}
 	if got.Context.Window != 256_000 || got.Context.OutputReserve != 8_192 {
 		t.Fatalf("unexpected context defaults: %+v", got.Context)
+	}
+}
+
+func TestLoadFileRejectsInvalidMemoryDurations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`model:
+  protocol: anthropic
+  base_url: https://example.com
+  api_key: key
+  name: model
+memory:
+  scan_interval: -1s
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(path, nil); err == nil || !strings.Contains(err.Error(), "memory.scan_interval") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

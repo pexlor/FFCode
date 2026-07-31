@@ -7,7 +7,8 @@ memory:
   generate: true
   use: true
   root: .ffcode/memory
-  min_session_idle: 30m
+  min_session_idle: 10m
+  scan_interval: 30s
   extraction_concurrency: 2
   max_sessions_per_run: 100
   summary_token_limit: 8000
@@ -16,7 +17,7 @@ memory:
   disable_on_external_context: true
 ```
 
-`generate` 控制后台抽取/整合，`use` 控制 Prompt 注入，二者独立。未配置时两者均为 `true`；专用模型为空时复用主模型。`root` 为相对路径时相对于当前 Workspace。
+`generate` 控制后台抽取/整合，`use` 控制 Prompt 注入，二者独立。未配置时两者均为 `true`；专用模型为空时复用主模型，非空时复用主 Provider 配置创建对应模型 Client。`root` 为相对路径时相对于当前 Workspace。Worker 启动时立即补扫、在 Turn 完成后安排空闲边界检查，并以 `scan_interval` 兜底恢复遗漏任务。
 
 本目录定义并加载用户配置。
 

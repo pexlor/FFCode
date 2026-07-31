@@ -55,7 +55,7 @@ func Run(arguments []string, stdout, stderr io.Writer, version string) int {
 	}
 
 	ctx := context.Background()
-	runtime, err := bootstrap(ctx, config, workspace, systemPrompt)
+	runtime, err := bootstrap(ctx, config, workspace, systemPrompt, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "应用初始化失败: %v\n", err)
 		return 1
