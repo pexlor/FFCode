@@ -51,6 +51,25 @@ func TestLLMExtractorTreatsEmptyCategoriesAsNoOutput(t *testing.T) {
 	}
 }
 
+func TestLLMExtractorAcceptsSingletonEvidenceObject(t *testing.T) {
+	extractor := LLMExtractor{Client: fakeLLM{events: []llm.StreamEvent{llm.TextStream{Text: `{"categories":[{"key":"reference/project/tests","kind":"reference","content":"Run tests.","confidence":0.9,"evidence":{"message_id":"m1","turn_id":"t1","quote":"Run tests"}}]}`}}}, Model: "test", PromptVersion: 1}
+	raw, err := extractor.Extract(context.Background(), ExtractRequest{SessionID: "session-1", TranscriptHash: "hash", SourceVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Categories) != 1 || len(raw.Categories[0].Evidence) != 1 || raw.Categories[0].Evidence[0].MessageID != "m1" {
+		t.Fatalf("singleton evidence was not normalized: %+v", raw)
+	}
+}
+
+func TestLLMExtractorRejectsScalarEvidence(t *testing.T) {
+	extractor := LLMExtractor{Client: fakeLLM{events: []llm.StreamEvent{llm.TextStream{Text: `{"categories":[{"key":"reference/project/tests","kind":"reference","content":"Run tests.","confidence":0.9,"evidence":"m1"}]}`}}}, Model: "test", PromptVersion: 1}
+	_, err := extractor.Extract(context.Background(), ExtractRequest{SessionID: "session-1", TranscriptHash: "hash", SourceVersion: 1})
+	if err == nil || !strings.Contains(err.Error(), "evidence must be an object or array") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLLMExtractorRejectsToolCalls(t *testing.T) {
 	extractor := LLMExtractor{Client: fakeLLM{events: []llm.StreamEvent{llm.ToolCallStart{ToolID: "tool-1", ToolName: "exec"}}}, Model: "test", PromptVersion: 1}
 	if _, err := extractor.Extract(context.Background(), ExtractRequest{}); err == nil {

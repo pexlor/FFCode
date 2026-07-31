@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -78,8 +79,8 @@ func (e LLMExtractor) Extract(ctx context.Context, request ExtractRequest) (RawM
 			}
 		}
 	}
-	var raw RawMemory
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output.String())), &raw); err != nil {
+	raw, err := decodeExtractorOutput([]byte(strings.TrimSpace(output.String())))
+	if err != nil {
 		return RawMemory{}, fmt.Errorf("decode memory extractor output: %w", err)
 	}
 	// Source metadata is authoritative runtime state. The model is never
@@ -102,6 +103,65 @@ func (e LLMExtractor) Extract(ctx context.Context, request ExtractRequest) (RawM
 	} else {
 		digest := sha256.Sum256([]byte(request.SessionID + "\x00" + request.TranscriptHash + fmt.Sprint(e.PromptVersion)))
 		raw.ID = "raw-" + hex.EncodeToString(digest[:])[:24]
+	}
+	return raw, nil
+}
+
+type extractorEvidenceList []Evidence
+
+func (list *extractorEvidenceList) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return errors.New("evidence must be an object or array")
+	}
+	switch data[0] {
+	case '[':
+		var evidence []Evidence
+		if err := json.Unmarshal(data, &evidence); err != nil {
+			return err
+		}
+		*list = evidence
+		return nil
+	case '{':
+		var evidence Evidence
+		if err := json.Unmarshal(data, &evidence); err != nil {
+			return err
+		}
+		*list = []Evidence{evidence}
+		return nil
+	case 'n':
+		if string(data) == "null" {
+			*list = nil
+			return nil
+		}
+	}
+	return errors.New("evidence must be an object or array")
+}
+
+type extractorMemoryItem struct {
+	Key        string                `json:"key"`
+	Kind       MemoryKind            `json:"kind"`
+	Content    string                `json:"content"`
+	Evidence   extractorEvidenceList `json:"evidence"`
+	Confidence float64               `json:"confidence"`
+	Scope      string                `json:"scope,omitempty"`
+	ExpiresAt  *time.Time            `json:"expires_at,omitempty"`
+}
+
+func decodeExtractorOutput(data []byte) (RawMemory, error) {
+	var output struct {
+		Categories     []extractorMemoryItem `json:"categories"`
+		SessionSummary string                `json:"session_summary,omitempty"`
+	}
+	if err := json.Unmarshal(data, &output); err != nil {
+		return RawMemory{}, err
+	}
+	raw := RawMemory{SessionSummary: output.SessionSummary, Categories: make([]MemoryItem, 0, len(output.Categories))}
+	for _, item := range output.Categories {
+		raw.Categories = append(raw.Categories, MemoryItem{
+			Key: item.Key, Kind: item.Kind, Content: item.Content, Evidence: []Evidence(item.Evidence),
+			Confidence: item.Confidence, Scope: item.Scope, ExpiresAt: item.ExpiresAt,
+		})
 	}
 	return raw, nil
 }
@@ -165,6 +225,7 @@ Each category must use one of user_preference, correction, project_fact, referen
 key (a stable lowercase slash path), scope (global, workspace, or session), content, confidence, and evidence with message_id,
 turn_id, and a short verbatim quote. Use global scope only for an explicit cross-project user
 preference. Do not include secrets, hidden reasoning, guesses, or temporary task state.
+Evidence must always be a JSON array, for example: "evidence": [{"message_id":"m1","turn_id":"t1","quote":"..."}].
 An empty categories array is correct when the session contains no durable memory.`
 
 var (
